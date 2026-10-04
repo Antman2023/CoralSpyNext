@@ -63,6 +63,17 @@ jobs:
           rustc -Vv
           cargo fetch --locked
           (cd hook-engine && cargo fetch --locked)
+      - name: Reuse dependencies and incremental build outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            hook-engine/target
+          key: windows-gnu-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock', 'hook-engine/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            windows-gnu-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock', 'hook-engine/Cargo.lock') }}-
       - name: Format and host tests
         shell: bash
         run: |

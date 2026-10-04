@@ -129,9 +129,19 @@ try {
     $buildInfo = Get-Content -LiteralPath (Bundle-Path $release 'BUILD-INFO.json') -Raw -Encoding utf8 | ConvertFrom-Json
     if ($buildInfo.commit -ne $manifest.commit) { throw 'Release and verification bundles come from different commits.' }
     $application = Bundle-Path $release 'coralspynext.exe'
+    # Preflight hashes must all pass before any executable starts. Individual
+    # fixture failures are then collected, so one defect does not hide unrelated
+    # tests; any failure still prevents publishing.
+    foreach ($test in $manifest.test_executables) { [void](Verify-Hash $bundle $test) }
+    $testFailures = [System.Collections.Generic.List[string]]::new()
     foreach ($test in $manifest.test_executables) {
-        $executable = Verify-Hash $bundle $test
-        Run-OwnedProcess ([IO.Path]::GetFileNameWithoutExtension($executable)) $executable @('--test-threads=1', '--nocapture') $TestTimeoutSeconds
+        $executable = Bundle-Path $bundle ([string]$test.path)
+        try {
+            Run-OwnedProcess ([IO.Path]::GetFileNameWithoutExtension($executable)) $executable @('--test-threads=1', '--nocapture') $TestTimeoutSeconds
+        } catch {
+            $testFailures.Add($_.Exception.Message)
+            Write-Warning $_.Exception.Message
+        }
     }
     $harness = Bundle-Path $bundle 'hook-fixtures/Test-OwnedFixture.ps1'
     $reportRoot = Join-Path (Split-Path -Parent $harness) 'test-results'
@@ -152,6 +162,7 @@ try {
         }
     }
     Copy-Item -LiteralPath $reports[0].FullName -Destination (Join-Path $resultsDirectory 'owned-hook-results.json')
+    if ($testFailures.Count -gt 0) { throw ('Native Rust test failures: ' + ($testFailures -join '; ')) }
     $passed = $true
     Write-Host 'The exact packaged GUI, owned root Windows tests, and targeted x86/x64 Hook fixtures passed. Desktop-global Hook tests were not enabled.'
 } catch {

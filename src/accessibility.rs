@@ -630,7 +630,20 @@ pub fn inspect_in_process(hwnd: u64) -> Result<ContentSnapshot, String> {
         return Err(label("采集期间所选窗口已关闭或改变；结果已丢弃，请重新选取", "The selected window closed or changed during collection; results were discarded. Select it again").into());
     }
     if state.snapshot.nodes.is_empty() || !state.had_content {
-        return Err(label("提供程序没有返回可读内容。目标可能不支持 UI Automation、内容受限，或当前为空且没有文本模式；这不是成功的空结果。", "The provider returned no readable content. The target may not support UI Automation, its content may be restricted, or it may be empty with no text pattern; this is not a successful empty result.").into());
+        // Report only structural counts and program-owned warnings. Never add
+        // unverified provider Name/Value/Text data to an error diagnostic.
+        let nodes = state.snapshot.nodes.len();
+        let protected = state
+            .snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.is_password)
+            .count();
+        let warnings = state.snapshot.warnings.join(" ");
+        return Err(localized_format!(
+            "提供程序没有返回可读内容。目标可能不支持 UI Automation、内容受限，或当前为空且没有文本模式；这不是成功的空结果。元素：{nodes}；受保护或未验证：{protected}。{warnings}",
+            "The provider returned no readable content. The target may not support UI Automation, its content may be restricted, or it may be empty with no text pattern; this is not a successful empty result. Elements: {nodes}; protected or unverified: {protected}. {warnings}"
+        ));
     }
     state
         .warn(label("结果取决于目标程序的可访问性提供程序；未暴露、虚拟化或更高权限的内容可能不可读取。", "Results depend on the target application's accessibility provider; unexposed, virtualized, or higher-privilege content may not be readable."));
