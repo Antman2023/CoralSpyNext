@@ -12,7 +12,7 @@
 
 [下载](https://github.com/Antman2023/CoralSpyNext/releases) · [快速上手](#快速上手) · [从源码构建](#从源码构建) · [功能对应表](docs/PARITY_STATUS.md) · [反馈问题](https://github.com/Antman2023/CoralSpyNext/issues)
 
-> 当前源码版本为 **0.3.1**，仍待 CI 验证与 `v0.3.1` 标签发布。Linux 检查和 GNU 交叉构建已执行；Windows 11 实机交互验收尚未完成。发布状态请以 Releases 和对应提交的 Actions 记录为准。
+> 当前源码版本为 **0.3.1**。构建与发布状态以 Releases 和对应提交的 Actions 记录为准。Linux 检查和 GNU 交叉构建已执行；Windows 11 实机交互验收尚未完成。
 
 ## 下载与运行
 
