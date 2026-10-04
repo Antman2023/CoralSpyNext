@@ -13,3 +13,5 @@ pub mod platform;
 
 #[cfg(windows)]
 pub mod helper_guard;
+
+pub mod locale;

@@ -78,7 +78,11 @@ pub fn matches_filter(node: &WindowNode, query: &str) -> bool {
         || hwnd_text(node.hwnd).to_lowercase().contains(&q)
 }
 pub fn window_text(info: &WindowInfo) -> String {
-    format!("CoralSpyNext — 窗口检查结果\nHWND: {}\n父句柄: {}\n标题: {}\n类型: {}\n进程: {}\nPID: {} / TID: {}\n位置: ({}, {})\n大小: {} × {} px\nDPI: {}\n可见: {} / 启用: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\n文本状态: {}\n", hwnd_text(info.hwnd), hwnd_text(info.parent), info.title, info.class_name, info.process_name, info.pid, info.tid, info.rect.left, info.rect.top, info.rect.width(), info.rect.height(), info.dpi, info.visible, info.enabled, info.style, info.ex_style, info.text_status)
+    crate::localized_format!(
+        "CoralSpyNext — 窗口检查结果\nHWND: {}\n父句柄: {}\n标题: {}\n类型: {}\n进程: {}\nPID: {} / TID: {}\n位置: ({}, {})\n大小: {} × {} px\nDPI: {}\n可见: {} / 启用: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\n文本状态: {}\n",
+        "CoralSpyNext — Window inspection results\nHWND: {}\nParent HWND: {}\nTitle: {}\nClass: {}\nProcess: {}\nPID: {} / TID: {}\nPosition: ({}, {})\nSize: {} × {} px\nDPI: {}\nVisible: {} / Enabled: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\nText status: {}\n",
+        hwnd_text(info.hwnd), hwnd_text(info.parent), info.title, info.class_name, info.process_name, info.pid, info.tid, info.rect.left, info.rect.top, info.rect.width(), info.rect.height(), info.dpi, info.visible, info.enabled, info.style, info.ex_style, info.text_status
+    )
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -55,26 +55,39 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
-            return Err("不支持此设置文件版本 / Unsupported settings version".into());
+            return Err(crate::locale::label(
+                "不支持此设置文件版本",
+                "Unsupported settings version",
+            )
+            .into());
         }
         if !matches!(self.language.as_str(), "zh-CN" | "en-US") {
-            return Err("语言只支持中文或英文 / Language must be Chinese or English".into());
+            return Err(crate::locale::label(
+                "语言只支持中文或英文",
+                "Language must be Chinese or English",
+            )
+            .into());
         }
         for h in &self.hotkeys {
             if h.modifiers & !0x000f != 0
                 || h.modifiers == 0
                 || !(0x30..=0x5a).contains(&h.key) && !(0x70..=0x87).contains(&h.key)
             {
-                return Err(
-                    "热键应带 Ctrl/Alt/Shift/Win 修饰键及字母、数字或 F1-F24 / Invalid hotkey"
-                        .into(),
-                );
+                return Err(crate::locale::label(
+                    "热键应带 Ctrl/Alt/Shift/Win 修饰键及字母、数字或 F1-F24",
+                    "Hotkeys require a Ctrl/Alt/Shift/Win modifier and a letter, digit, or F1-F24",
+                )
+                .into());
             }
         }
         for i in 0..3 {
             for j in i + 1..3 {
                 if self.hotkeys[i] == self.hotkeys[j] {
-                    return Err("三个热键不能重复 / Hotkeys must be distinct".into());
+                    return Err(crate::locale::label(
+                        "三个热键不能重复",
+                        "Hotkeys must be distinct",
+                    )
+                    .into());
                 }
             }
         }
@@ -85,7 +98,13 @@ fn settings_path() -> Result<PathBuf, String> {
     std::env::var_os("LOCALAPPDATA")
         .filter(|v| !v.is_empty())
         .map(|p| PathBuf::from(p).join("CoralSpyNext").join("settings.json"))
-        .ok_or_else(|| "找不到 LOCALAPPDATA，设置未保存 / LOCALAPPDATA unavailable".into())
+        .ok_or_else(|| {
+            crate::locale::label(
+                "找不到 LOCALAPPDATA，设置未保存",
+                "LOCALAPPDATA is unavailable; settings were not saved",
+            )
+            .into()
+        })
 }
 pub fn load() -> (AppSettings, Option<String>) {
     let p = match settings_path() {
@@ -100,8 +119,9 @@ pub fn load() -> (AppSettings, Option<String>) {
         Err(e) => {
             return (
                 AppSettings::default(),
-                Some(format!(
-                    "读取设置失败，已用默认设置 / Settings read failed: {e}"
+                Some(crate::localized_format!(
+                    "读取设置失败，已用默认设置：{e}",
+                    "Settings could not be read; defaults were used: {e}"
                 )),
             )
         }
@@ -109,7 +129,13 @@ pub fn load() -> (AppSettings, Option<String>) {
     if data.len() > 65536 {
         return (
             AppSettings::default(),
-            Some("设置文件过大，已使用默认值 / Settings file too large".into()),
+            Some(
+                crate::locale::label(
+                    "设置文件过大，已使用默认值",
+                    "Settings file is too large; defaults were used",
+                )
+                .into(),
+            ),
         );
     }
     match serde_json::from_slice::<AppSettings>(&data)
@@ -118,18 +144,26 @@ pub fn load() -> (AppSettings, Option<String>) {
         Ok(s) => (s, None),
         Err(e) => (
             AppSettings::default(),
-            Some(format!("设置无效，已使用默认值 / Invalid settings: {e}")),
+            Some(crate::localized_format!(
+                "设置无效，已使用默认值：{e}",
+                "Settings are invalid; defaults were used: {e}"
+            )),
         ),
     }
 }
 pub fn save(settings: &AppSettings) -> Result<(), String> {
     settings.validate()?;
     let p = settings_path()?;
-    let dir = p.parent().ok_or("Invalid settings path")?;
+    let dir = p.parent().ok_or(crate::locale::label(
+        "设置路径无效",
+        "Invalid settings path",
+    ))?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let data = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
     let temp = dir.join(format!("settings.{}.tmp", std::process::id()));
-    std::fs::write(&temp, data).map_err(|e| format!("写入设置失败 / Cannot save settings: {e}"))?;
+    std::fs::write(&temp, data).map_err(|e| {
+        crate::localized_format!("写入设置失败：{e}", "Could not write settings: {e}")
+    })?;
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -146,7 +180,10 @@ pub fn save(settings: &AppSettings) -> Result<(), String> {
         if result == 0 {
             let e = std::io::Error::last_os_error();
             let _ = std::fs::remove_file(temp);
-            return Err(format!("保存设置失败 / Cannot replace settings: {e}"));
+            return Err(crate::localized_format!(
+                "保存设置失败：{e}",
+                "Could not replace settings: {e}"
+            ));
         }
     }
     #[cfg(not(windows))]

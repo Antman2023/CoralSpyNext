@@ -59,18 +59,30 @@ impl HotkeyBinding {
     /// conflicts with another application's registration or a system shortcut.
     pub fn validate(self) -> Result<(), String> {
         if self.modifiers & !0x0f != 0 {
-            return Err("修饰键仅支持 Ctrl、Alt、Shift、Win".to_owned());
+            return Err(crate::locale::label(
+                "修饰键仅支持 Ctrl、Alt、Shift、Win",
+                "Modifiers must be Ctrl, Alt, Shift, or Win",
+            )
+            .to_owned());
         }
         if self.modifiers == 0 {
-            return Err("全局热键至少需要一个修饰键，避免占用普通输入".to_owned());
+            return Err(crate::locale::label("全局热键至少需要一个修饰键，避免占用普通输入", "Global hotkeys require at least one modifier to avoid interfering with normal typing").to_owned());
         }
         if !(0x08..=0xfe).contains(&self.key)
             || matches!(self.key, 0x10..=0x12 | 0x5b..=0x5c | 0xa0..=0xa5)
         {
-            return Err("请选择有效的非修饰键 Windows 虚拟键码".to_owned());
+            return Err(crate::locale::label(
+                "请选择有效的非修饰键 Windows 虚拟键码",
+                "Choose a valid Windows virtual-key code that is not a modifier",
+            )
+            .to_owned());
         }
         if self.key == 0x7b {
-            return Err("F12 由 Windows 调试器保留，请选择其他按键".to_owned());
+            return Err(crate::locale::label(
+                "F12 由 Windows 调试器保留，请选择其他按键",
+                "F12 is reserved for the Windows debugger; choose another key",
+            )
+            .to_owned());
         }
         Ok(())
     }
@@ -94,11 +106,15 @@ impl std::fmt::Display for HotkeyBinding {
 #[cfg(any(windows, test))]
 fn validate_bindings(bindings: &[HotkeyBinding; 3]) -> Result<(), String> {
     for (index, binding) in bindings.iter().enumerate() {
-        binding
-            .validate()
-            .map_err(|error| format!("热键 {}：{error}", index + 1))?;
+        binding.validate().map_err(|error| {
+            crate::localized_format!("热键 {}：{error}", "Hotkey {}: {error}", index + 1)
+        })?;
         if bindings[..index].contains(binding) {
-            return Err(format!("热键 {} 与前面的热键重复：{binding}", index + 1));
+            return Err(crate::localized_format!(
+                "热键 {} 与前面的热键重复：{binding}",
+                "Hotkey {} duplicates an earlier hotkey: {binding}",
+                index + 1
+            ));
         }
     }
     Ok(())
@@ -152,7 +168,11 @@ mod native {
     const TRAY_ID: u32 = 1;
     const POLL_TIMER: usize = 1;
     const HOTKEY_IDS: [i32; 3] = [0x4251, 0x4252, 0x4253];
-    const HOTKEY_NAMES: [&str; 3] = ["主窗口", "颜色查看器", "开始捕获"];
+    const HOTKEY_NAMES: [(&str, &str); 3] = [
+        ("主窗口", "Main window"),
+        ("颜色查看器", "Color viewer"),
+        ("开始捕获", "Start capture"),
+    ];
     const START_TIMEOUT: Duration = Duration::from_secs(4);
     const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
     const STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -244,7 +264,7 @@ mod native {
                             emit_event(&worker_shared, &event_tx, DesktopEvent::ShowMain, false);
                         }
                         Err(_) => {
-                            let message = "桌面服务意外停止；托盘和全局热键已停止".to_owned();
+                            let message = crate::locale::label("桌面服务意外停止；托盘和全局热键已停止", "The desktop service stopped unexpectedly; the tray and global hotkeys have stopped").to_owned();
                             let _ = ready_tx.try_send(Err(message.clone()));
                             emit_event(
                                 &worker_shared,
@@ -259,7 +279,7 @@ mod native {
                                 &worker_shared,
                                 &event_tx,
                                 DesktopEvent::Notice(
-                                    "桌面服务意外退出，托盘和全局热键已停止".to_owned(),
+                                    crate::locale::label("桌面服务意外退出，托盘和全局热键已停止", "The desktop service exited unexpectedly; the tray and global hotkeys have stopped").to_owned(),
                                 ),
                                 false,
                             );
@@ -271,7 +291,7 @@ mod native {
                     worker_shared.alive.store(false, Ordering::Release);
                     let _ = finished_tx.send(());
                 })
-                .map_err(|error| format!("无法启动桌面服务：{error}"))?;
+                .map_err(|error| crate::localized_format!("无法启动桌面服务：{error}", "Could not start the desktop service: {error}"))?;
             match ready_rx.recv_timeout(START_TIMEOUT) {
                 Ok(Ok(())) => Ok(Self {
                     commands,
@@ -290,7 +310,10 @@ mod native {
                     }
                     match status {
                         Ok(Err(error)) => Err(error),
-                        Err(error) => Err(format!("桌面服务启动未完成：{error}")),
+                        Err(error) => Err(crate::localized_format!(
+                            "桌面服务启动未完成：{error}",
+                            "Desktop service startup did not complete: {error}"
+                        )),
                         Ok(Ok(())) => unreachable!(),
                     }
                 }
@@ -324,7 +347,7 @@ mod native {
                 {
                     wake_gui(&self.shared, true, false);
                     Some(DesktopEvent::Notice(
-                        "桌面服务连接已关闭，托盘和全局热键不可用；请重新启动程序".to_owned(),
+                        crate::locale::label("桌面服务连接已关闭，托盘和全局热键不可用；请重新启动程序", "The desktop service connection is closed; the tray and global hotkeys are unavailable. Restart the application").to_owned(),
                     ))
                 }
                 Err(_) => None,
@@ -355,7 +378,11 @@ mod native {
                 || !self.shared.alive.load(Ordering::Acquire)
             {
                 wake_gui(&self.shared, true, false);
-                return Err("桌面服务已经停止".to_owned());
+                return Err(crate::locale::label(
+                    "桌面服务已经停止",
+                    "The desktop service has stopped",
+                )
+                .to_owned());
             }
             let (reply, result) = mpsc::sync_channel(1);
             let cancelled = Arc::new(AtomicBool::new(false));
@@ -367,14 +394,21 @@ mod native {
                 })
                 .map_err(|_| {
                     wake_gui(&self.shared, true, false);
-                    "桌面服务连接已关闭".to_owned()
+                    crate::locale::label(
+                        "桌面服务连接已关闭",
+                        "The desktop service connection is closed",
+                    )
+                    .to_owned()
                 })?;
             let hwnd = self.shared.hwnd.load(Ordering::Acquire) as HWND;
             // SAFETY: PostMessage does not dereference HWND or share Rust memory;
             // only the worker accesses window-owned state. No pointer is posted.
             if hwnd.is_null() || unsafe { PostMessageW(hwnd, WM_WAKE, 0, 0) } == 0 {
                 cancelled.store(true, Ordering::Release);
-                let error = last_error("唤醒桌面服务失败，服务正在停止");
+                let error = last_error(crate::locale::label(
+                    "唤醒桌面服务失败，服务正在停止",
+                    "Could not wake the desktop service; it is stopping",
+                ));
                 request_stop(&self.shared);
                 wake_gui(&self.shared, true, false);
                 return Err(error);
@@ -385,8 +419,8 @@ mod native {
                     cancelled.store(true, Ordering::Release);
                     request_stop(&self.shared);
                     wake_gui(&self.shared, true, false);
-                    Err(format!(
-                        "桌面服务响应未确认，已请求停止托盘与全局热键：{error}"
+                    Err(crate::localized_format!(
+                        "桌面服务响应未确认，已请求停止托盘与全局热键：{error}", "The desktop service response was not confirmed; shutdown of the tray and global hotkeys was requested: {error}"
                     ))
                 }
             }
@@ -502,8 +536,9 @@ mod native {
     fn last_error(operation: &str) -> String {
         // SAFETY: GetLastError is thread-local and takes no pointer arguments.
         let code = unsafe { GetLastError() };
-        format!(
+        crate::localized_format!(
             "{operation}（Win32 {code}：{}）",
+            "{operation} (Win32 {code}: {})",
             std::io::Error::from_raw_os_error(code as i32)
         )
     }
@@ -521,13 +556,19 @@ mod native {
             // SAFETY: NULL requests this process's existing module, borrowed only.
             let module = unsafe { GetModuleHandleW(null()) };
             if module.is_null() {
-                return Err(last_error("读取程序模块失败"));
+                return Err(last_error(crate::locale::label(
+                    "读取程序模块失败",
+                    "Could not read the application module",
+                )));
             }
             let taskbar_name = wide("TaskbarCreated");
             // SAFETY: The UTF-16 buffer is terminated and valid for this call.
             let taskbar_created = unsafe { RegisterWindowMessageW(taskbar_name.as_ptr()) };
             if taskbar_created == 0 {
-                return Err(last_error("注册任务栏恢复消息失败"));
+                return Err(last_error(crate::locale::label(
+                    "注册任务栏恢复消息失败",
+                    "Could not register the taskbar recovery message",
+                )));
             }
             let context = Box::new(WindowContext {
                 native,
@@ -546,7 +587,10 @@ mod native {
             class.lpszClassName = class_name.as_ptr();
             // SAFETY: Class strings and callback remain valid for its lifetime.
             if unsafe { RegisterClassW(&class) } == 0 {
-                return Err(last_error("注册桌面服务窗口类失败"));
+                return Err(last_error(crate::locale::label(
+                    "注册桌面服务窗口类失败",
+                    "Could not register the desktop service window class",
+                )));
             }
             // A hidden top-level window (not HWND_MESSAGE) receives Explorer's
             // TaskbarCreated broadcast. It never becomes a visible taskbar item.
@@ -568,7 +612,10 @@ mod native {
                 )
             };
             if hwnd.is_null() {
-                let error = last_error("创建桌面服务窗口失败");
+                let error = last_error(crate::locale::label(
+                    "创建桌面服务窗口失败",
+                    "Could not create the desktop service window",
+                ));
                 // SAFETY: This class was registered here and has no live windows.
                 unsafe {
                     UnregisterClassW(class_name.as_ptr(), module);
@@ -584,7 +631,10 @@ mod native {
             // A modest timer also observes cancellation if posting a wake fails.
             // SAFETY: The timer belongs to our window and runs on this thread.
             if unsafe { SetTimer(hwnd, POLL_TIMER, 250, None) } == 0 {
-                return Err(last_error("创建桌面服务退出计时器失败"));
+                return Err(last_error(crate::locale::label(
+                    "创建桌面服务退出计时器失败",
+                    "Could not create the desktop service shutdown timer",
+                )));
             }
             window
                 .context
@@ -718,7 +768,10 @@ mod native {
         // alive until CreateIcon copies them; the returned icon is independently owned.
         let icon = unsafe { CreateIcon(module, 32, 32, 1, 32, mask.as_ptr(), pixels.as_ptr()) };
         if icon.is_null() {
-            Err(last_error("创建托盘图标失败"))
+            Err(last_error(crate::locale::label(
+                "创建托盘图标失败",
+                "Could not create the tray icon",
+            )))
         } else {
             Ok(OwnedIcon(icon))
         }
@@ -749,23 +802,29 @@ mod native {
             address: u64,
             waker: Arc<dyn Fn() + Send + Sync>,
         ) -> Result<(), String> {
-            let address =
-                usize::try_from(address).map_err(|_| "GUI 窗口句柄超出当前指针宽度".to_owned())?;
+            let address = usize::try_from(address).map_err(|_| {
+                crate::locale::label(
+                    "GUI 窗口句柄超出当前指针宽度",
+                    "The GUI window handle exceeds the current pointer width",
+                )
+                .to_owned()
+            })?;
             if owned_gui_window(address).is_none() || address == self.window.hwnd as usize {
-                return Err("只能绑定当前程序自己的 GUI 窗口".to_owned());
+                return Err(crate::locale::label(
+                    "只能绑定当前程序自己的 GUI 窗口",
+                    "Only this application's own GUI window can be bound",
+                )
+                .to_owned());
             }
             let target = GuiTarget {
                 hwnd: address,
                 waker,
             };
             let previous = {
-                let mut saved = self
-                    .window
-                    .context
-                    .shared
-                    .gui
-                    .lock()
-                    .map_err(|_| "GUI 唤醒状态不可用".to_owned())?;
+                let mut saved = self.window.context.shared.gui.lock().map_err(|_| {
+                    crate::locale::label("GUI 唤醒状态不可用", "GUI wake state is unavailable")
+                        .to_owned()
+                })?;
                 saved.replace(target.clone())
             };
             // Even destruction of an old callback's captured state is outside the lock.
@@ -784,7 +843,11 @@ mod native {
                     if unsafe { UnregisterHotKey(self.window.hwnd, HOTKEY_IDS[index]) } != 0 {
                         *registered = false;
                     } else {
-                        errors.push(last_error(&format!("注销{}热键失败", HOTKEY_NAMES[index])));
+                        errors.push(last_error(&crate::localized_format!(
+                            "注销{}热键失败",
+                            "Could not unregister the {} hotkey",
+                            crate::locale::label(HOTKEY_NAMES[index].0, HOTKEY_NAMES[index].1)
+                        )));
                     }
                 }
             }
@@ -798,7 +861,11 @@ mod native {
                     .shared
                     .stopping
                     .store(true, Ordering::Release);
-                let error = format!("{}；桌面服务正在停止", errors.join("；"));
+                let error = crate::localized_format!(
+                    "{}；桌面服务正在停止",
+                    "{}; the desktop service is stopping",
+                    errors.join(crate::locale::label("；", "; "))
+                );
                 self.notice(error.clone());
                 self.emit(DesktopEvent::ShowMain, false);
                 Err(error)
@@ -839,9 +906,9 @@ mod native {
                 } != 0;
                 self.registered[index] = success;
                 if !success {
-                    let error = last_error(&format!(
-                        "{}热键 {binding} 注册失败，可能被其他程序或 Windows 占用",
-                        HOTKEY_NAMES[index]
+                    let error = last_error(&crate::localized_format!(
+                        "{}热键 {binding} 注册失败，可能被其他程序或 Windows 占用", "Could not register the {} hotkey {binding}; another application or Windows may be using it",
+                        crate::locale::label(HOTKEY_NAMES[index].0, HOTKEY_NAMES[index].1)
                     ));
                     self.notice(error.clone());
                     errors.push(error);
@@ -853,7 +920,11 @@ mod native {
                 if let Err(error) = self.unregister_hotkeys() {
                     errors.push(error);
                 }
-                Err(format!("全局热键未启用：{}", errors.join("；")))
+                Err(crate::localized_format!(
+                    "全局热键未启用：{}",
+                    "Global hotkeys are not enabled: {}",
+                    errors.join(crate::locale::label("；", "; "))
+                ))
             }
         }
 
@@ -882,13 +953,17 @@ mod native {
             // Shell_NotifyIcon does not promise useful GetLastError diagnostics.
             // SAFETY: Every referenced buffer and icon is owned and live.
             if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
-                return Err("无法添加通知区域图标；Windows 任务栏可能尚未就绪".to_owned());
+                return Err(crate::locale::label("无法添加通知区域图标；Windows 任务栏可能尚未就绪", "Could not add the notification area icon; the Windows taskbar may not be ready").to_owned());
             }
             self.tray_added = true;
             data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
             if unsafe { Shell_NotifyIconW(NIM_SETVERSION, &data) } == 0 {
                 self.remove_tray();
-                return Err("无法启用通知区域图标的 Windows 11 交互模式".to_owned());
+                return Err(crate::locale::label(
+                    "无法启用通知区域图标的 Windows 11 交互模式",
+                    "Could not enable Windows 11 interaction mode for the notification area icon",
+                )
+                .to_owned());
             }
             Ok(())
         }
@@ -910,7 +985,11 @@ mod native {
                 data.szTip[..tip.len()].copy_from_slice(&tip);
                 // SAFETY: This updates our live icon with a bounded UTF-16 tooltip.
                 if unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) } == 0 {
-                    return Err("无法更新托盘提示语言 / Could not update tray tooltip".to_owned());
+                    return Err(crate::locale::label(
+                        "无法更新托盘提示语言",
+                        "Could not update tray tooltip",
+                    )
+                    .to_owned());
                 }
             }
             Ok(())
@@ -982,8 +1061,8 @@ mod native {
                 NativeEvent::TaskbarCreated if self.tray_requested => {
                     self.tray_added = false;
                     if let Err(error) = self.add_tray() {
-                        self.notice(format!(
-                            "任务栏重启后恢复托盘图标失败：{error}；请在选项中重新启用托盘"
+                        self.notice(crate::localized_format!(
+                            "任务栏重启后恢复托盘图标失败：{error}；请在选项中重新启用托盘", "Could not restore the tray icon after the taskbar restarted: {error}; re-enable the tray in Options"
                         ));
                         // A hidden GUI must regain a usable route to its controls.
                         self.emit(DesktopEvent::ShowMain, false);
@@ -1011,7 +1090,10 @@ mod native {
             // SAFETY: An owned popup menu contains copied strings, no foreign callbacks.
             let menu = Menu(unsafe { CreatePopupMenu() });
             if menu.0.is_null() {
-                return Err(last_error("创建托盘菜单失败"));
+                return Err(last_error(crate::locale::label(
+                    "创建托盘菜单失败",
+                    "Could not create the tray menu",
+                )));
             }
             let labels = if self.english {
                 [
@@ -1038,7 +1120,10 @@ mod native {
                 let title = wide(title);
                 let flags = if id == 0 { MF_SEPARATOR } else { MF_STRING };
                 if unsafe { AppendMenuW(menu.0, flags, id, title.as_ptr()) } == 0 {
-                    return Err(last_error("填充托盘菜单失败"));
+                    return Err(last_error(crate::locale::label(
+                        "填充托盘菜单失败",
+                        "Could not populate the tray menu",
+                    )));
                 }
             }
             let mut position = POINT { x: 0, y: 0 };
@@ -1054,7 +1139,10 @@ mod native {
                     position.x = rect.left;
                     position.y = rect.bottom;
                 } else if GetCursorPos(&mut position) == 0 {
-                    return Err(last_error("读取托盘菜单位置失败"));
+                    return Err(last_error(crate::locale::label(
+                        "读取托盘菜单位置失败",
+                        "Could not read the tray menu position",
+                    )));
                 }
                 SetMenuDefaultItem(menu.0, 1, 0);
                 SetForegroundWindow(self.window.hwnd);
@@ -1163,7 +1251,10 @@ mod native {
             // SAFETY: MSG is writable; NULL collects this worker's messages only.
             let status = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
             if status == -1 {
-                return Err(last_error("桌面服务消息循环失败"));
+                return Err(last_error(crate::locale::label(
+                    "桌面服务消息循环失败",
+                    "The desktop service message loop failed",
+                )));
             }
             if status == 0 {
                 break;

@@ -41,8 +41,9 @@ fn create_job() -> Result<JobGuard, String> {
     // name creates a new private job rather than opening another process's job.
     let handle = unsafe { CreateJobObjectW(null(), null()) };
     if handle.is_null() {
-        return Err(format!(
+        return Err(crate::localized_format!(
             "创建检查进程生命周期保护失败：{}",
+            "Could not create the inspection process lifetime guard: {}",
             std::io::Error::last_os_error()
         ));
     }
@@ -65,8 +66,9 @@ fn create_job() -> Result<JobGuard, String> {
         )
     } == 0
     {
-        return Err(format!(
+        return Err(crate::localized_format!(
             "设置检查进程退出保护失败：{}",
+            "Could not configure the inspection process exit guard: {}",
             std::io::Error::last_os_error()
         )); // guard closes the unassigned job on this path too.
     }
@@ -79,8 +81,9 @@ fn bind_process(process: HANDLE) -> Result<JobGuard, String> {
     // Child; Windows validates the handle and assignment permissions. We never
     // open, alter, or assign the inspected target process to this job.
     if unsafe { AssignProcessToJobObject(guard._handle.as_raw_handle(), process) } == 0 {
-        return Err(format!(
+        return Err(crate::localized_format!(
             "关联检查进程退出保护失败：{}",
+            "Could not attach the inspection process exit guard: {}",
             std::io::Error::last_os_error()
         )); // guard closes even if an enclosing job disallows assignment.
     }

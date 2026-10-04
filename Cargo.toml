@@ -1,6 +1,6 @@
 [package]
 name = "coralspynext"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.99"
 description = "A modern, local-only Windows window inspector inspired by CoralSpy"

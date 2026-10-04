@@ -67,20 +67,28 @@ fn handle_value(hwnd: HWND) -> u64 {
 }
 
 fn checked_handle(value: u64) -> Result<HWND, String> {
-    let address =
-        usize::try_from(value).map_err(|_| "窗口句柄超出当前程序的指针宽度".to_owned())?;
+    let address = usize::try_from(value).map_err(|_| {
+        crate::locale::label(
+            "窗口句柄超出当前程序的指针宽度",
+            "The window handle exceeds this program's pointer width",
+        )
+        .to_owned()
+    })?;
     if address == 0 {
-        return Err("窗口句柄不能为空".to_owned());
+        return Err(
+            crate::locale::label("窗口句柄不能为空", "The window handle cannot be null").to_owned(),
+        );
     }
     Ok(address as HWND)
 }
 
 fn win32_error(operation: &str, code: u32) -> String {
     if code == 0 {
-        format!("{operation}失败；窗口可能已关闭或当前桌面不可访问")
+        crate::localized_format!("{operation}失败；窗口可能已关闭或当前桌面不可访问", "{operation} failed; the window may have closed or the current desktop may be inaccessible")
     } else {
-        format!(
+        crate::localized_format!(
             "{operation}失败（Win32 {code}：{}）",
+            "{operation} failed (Win32 {code}: {})",
             std::io::Error::from_raw_os_error(code as i32)
         )
     }
@@ -97,7 +105,10 @@ fn class_name(hwnd: HWND) -> Result<String, String> {
     // become invalid between calls (Win32 then returns failure).
     let count = unsafe { GetClassNameW(hwnd, text.as_mut_ptr(), text.len() as i32) };
     if count <= 0 {
-        return Err(last_error("读取窗口类型"));
+        return Err(last_error(crate::locale::label(
+            "读取窗口类型",
+            "Read window class",
+        )));
     }
     Ok(String::from_utf16_lossy(&text[..count as usize]))
 }
@@ -132,8 +143,8 @@ fn decode_title(text: &[u16], possibly_truncated: bool) -> String {
 fn safe_title(hwnd: HWND, class: &str, pid: u32) -> (String, String) {
     if is_input_class(class) {
         return (
-            "[输入控件：仅元数据]".to_owned(),
-            "隐私保护：不读取 Edit、RichEdit、密码及常见输入控件的文本".to_owned(),
+            crate::locale::label("[输入控件：仅元数据]", "[Input control: metadata only]").to_owned(),
+            crate::locale::label("隐私保护：不读取 Edit、RichEdit、密码及常见输入控件的文本", "Privacy protection: text from Edit, RichEdit, password, and common input controls is not read").to_owned(),
         );
     }
     // Unknown custom controls can store user input in the same Win32 caption
@@ -143,16 +154,16 @@ fn safe_title(hwnd: HWND, class: &str, pid: u32) -> (String, String) {
     let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
     if style & WS_CHILD != 0 || root != hwnd {
         return (
-            "[子控件：仅元数据]".to_owned(),
-            "隐私保护：所有子控件（含未知自定义控件）均不读取文本，仅检查元数据".to_owned(),
+            crate::locale::label("[子控件：仅元数据]", "[Child control: metadata only]").to_owned(),
+            crate::locale::label("隐私保护：所有子控件（含未知自定义控件）均不读取文本，仅检查元数据", "Privacy protection: only metadata is inspected for all child controls, including unknown custom controls; no text is read").to_owned(),
         );
     }
     // GetWindowTextW sends WM_GETTEXT for *same-process* HWNDs, which could
     // deadlock against our own GUI. Do not invoke it for any of our controls.
     if pid == unsafe { GetCurrentProcessId() } {
         return (
-            "[CoralSpyNext 自身窗口]".to_owned(),
-            "自身窗口仅显示元数据，避免同步读取阻塞界面".to_owned(),
+            crate::locale::label("[CoralSpyNext 自身窗口]", "[CoralSpyNext window]").to_owned(),
+            crate::locale::label("自身窗口仅显示元数据，避免同步读取阻塞界面", "Only metadata is shown for this program's own windows to avoid blocking the interface").to_owned(),
         );
     }
     let mut text = [0u16; TITLE_CAPACITY];
@@ -165,16 +176,26 @@ fn safe_title(hwnd: HWND, class: &str, pid: u32) -> (String, String) {
     };
     if count <= 0 {
         let status = if error != 0 {
-            win32_error("读取缓存标题", error)
+            win32_error(
+                crate::locale::label("读取缓存标题", "Read cached title"),
+                error,
+            )
         } else {
-            "无缓存标题；未尝试读取应用内容或控件文本".to_owned()
+            crate::locale::label(
+                "无缓存标题；未尝试读取应用内容或控件文本",
+                "No cached title; application content and control text were not requested",
+            )
+            .to_owned()
         };
         return (String::new(), status);
     }
-    let mut status = "仅读取顶层窗口的缓存标题；不读取子控件或输入文本".to_owned();
+    let mut status = crate::locale::label("仅读取顶层窗口的缓存标题；不读取子控件或输入文本", "Only the top-level window's cached title is read; child control and input text are not read").to_owned();
     let possibly_truncated = count as usize == text.len() - 1;
     if possibly_truncated {
-        status.push_str("；标题可能已截断（最多 2047 个 UTF-16 单元）");
+        status.push_str(crate::locale::label(
+            "；标题可能已截断（最多 2047 个 UTF-16 单元）",
+            "; the title may be truncated (maximum 2047 UTF-16 units)",
+        ));
     }
     (
         decode_title(&text[..count as usize], possibly_truncated),
@@ -213,11 +234,11 @@ impl Enumeration {
     fn exhausted(&mut self) -> bool {
         if self.nodes.len() >= ENUM_MAX_WINDOWS || self.visits >= ENUM_MAX_VISITS {
             self.notice =
-                Some("窗口数量达到安全上限，当前显示部分结果；可使用指针直接检查未列出的窗口。");
+                Some(crate::locale::label("窗口数量达到安全上限，当前显示部分结果；可使用指针直接检查未列出的窗口。", "The window count reached its safety limit; results are partial. Use the pointer to inspect windows not listed."));
             true
         } else if self.started.elapsed() >= ENUM_BUDGET {
             self.notice =
-                Some("窗口枚举达到 2.5 秒时间上限，当前显示部分结果；可刷新或使用指针直接检查。");
+                Some(crate::locale::label("窗口枚举达到 2.5 秒时间上限，当前显示部分结果；可刷新或使用指针直接检查。", "Window enumeration reached the 2.5-second limit; results are partial. Refresh or inspect directly with the pointer."));
             true
         } else {
             false
@@ -274,7 +295,7 @@ unsafe extern "system" fn collect_child(hwnd: HWND, parameter: LPARAM) -> BOOL {
         }
         ancestor = next;
     }
-    state.notice = Some("窗口层级超过 32 层，过深的控件已省略；可使用指针直接检查。");
+    state.notice = Some(crate::locale::label("窗口层级超过 32 层，过深的控件已省略；可使用指针直接检查。", "The window hierarchy exceeds 32 levels; deeper controls were omitted. Use the pointer to inspect them directly."));
     1
 }
 
@@ -297,7 +318,10 @@ pub fn enumerate_windows() -> Result<Vec<WindowNode>, String> {
         )
     };
     if ok == 0 && !tops.limited {
-        return Err(last_error("枚举顶层窗口"));
+        return Err(last_error(crate::locale::label(
+            "枚举顶层窗口",
+            "Enumerate top-level windows",
+        )));
     }
     let mut state = Enumeration {
         started,
@@ -305,9 +329,10 @@ pub fn enumerate_windows() -> Result<Vec<WindowNode>, String> {
         seen: HashSet::new(),
         root: null_mut(),
         visits: 0,
-        notice: tops
-            .limited
-            .then_some("顶层窗口枚举达到安全上限，当前显示部分结果。"),
+        notice: tops.limited.then_some(crate::locale::label(
+            "顶层窗口枚举达到安全上限，当前显示部分结果。",
+            "Top-level window enumeration reached its safety limit; results are partial.",
+        )),
     };
     for root in tops.handles {
         if state.exhausted() {
@@ -344,19 +369,24 @@ fn process_basename(pid: u32) -> String {
     // Limited-query access only: no VM_READ, debug privileges or elevation.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
-        return last_error("读取进程名称（可能无权限或进程已退出）");
+        return last_error(crate::locale::label(
+            "读取进程名称（可能无权限或进程已退出）",
+            "Read process name (access may be denied or the process may have exited)",
+        ));
     }
     let handle = ProcessHandle(handle);
     let mut path = vec![0u16; 32_768];
     let mut length = path.len() as u32;
     if unsafe { QueryFullProcessImageNameW(handle.0, 0, path.as_mut_ptr(), &mut length) } == 0 {
-        return last_error("读取进程名称");
+        return last_error(crate::locale::label("读取进程名称", "Read process name"));
     }
     // Keep only the executable basename; do not expose profile/directory paths.
     let path = PathBuf::from(OsString::from_wide(&path[..length as usize]));
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "进程名称不可用".to_owned())
+        .unwrap_or_else(|| {
+            crate::locale::label("进程名称不可用", "Process name unavailable").to_owned()
+        })
 }
 
 fn rect_value(rect: RECT) -> WindowRect {
@@ -371,12 +401,19 @@ fn rect_value(rect: RECT) -> WindowRect {
 pub fn inspect_window(value: u64) -> Result<WindowInfo, String> {
     let hwnd = checked_handle(value)?;
     if unsafe { IsWindow(hwnd) } == 0 {
-        return Err("窗口已关闭或句柄无效，请重新选取".to_owned());
+        return Err(crate::locale::label(
+            "窗口已关闭或句柄无效，请重新选取",
+            "The window has closed or its handle is invalid; select it again",
+        )
+        .to_owned());
     }
     let mut pid = 0;
     let tid = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
     if tid == 0 || pid == 0 {
-        return Err(last_error("读取窗口所属进程"));
+        return Err(last_error(crate::locale::label(
+            "读取窗口所属进程",
+            "Read window process",
+        )));
     }
     let class = class_name(hwnd)?;
     let (title, text_status) = safe_title(hwnd, &class, pid);
@@ -388,10 +425,16 @@ pub fn inspect_window(value: u64) -> Result<WindowInfo, String> {
     };
     let mut client = rect;
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
-        return Err(last_error("读取窗口区域"));
+        return Err(last_error(crate::locale::label(
+            "读取窗口区域",
+            "Read window rectangle",
+        )));
     }
     if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
-        return Err(last_error("读取客户区"));
+        return Err(last_error(crate::locale::label(
+            "读取客户区",
+            "Read client rectangle",
+        )));
     }
     // GWL_STYLE / GWL_EXSTYLE are 32-bit values even in a 64-bit program.
     let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
@@ -424,7 +467,11 @@ pub fn inspect_window(value: u64) -> Result<WindowInfo, String> {
     let mut final_pid = 0;
     let final_tid = unsafe { GetWindowThreadProcessId(hwnd, &mut final_pid) };
     if final_tid != tid || final_pid != pid || unsafe { IsWindow(hwnd) } == 0 {
-        return Err("检查期间窗口已关闭或发生变化，请重新选取".to_owned());
+        return Err(crate::locale::label(
+            "检查期间窗口已关闭或发生变化，请重新选取",
+            "The window closed or changed during inspection; select it again",
+        )
+        .to_owned());
     }
     Ok(info)
 }
@@ -432,7 +479,10 @@ pub fn inspect_window(value: u64) -> Result<WindowInfo, String> {
 fn cursor_position() -> Result<POINT, String> {
     let mut point = POINT { x: 0, y: 0 };
     if unsafe { GetCursorPos(&mut point) } == 0 {
-        return Err(last_error("读取指针位置"));
+        return Err(last_error(crate::locale::label(
+            "读取指针位置",
+            "Read pointer position",
+        )));
     }
     Ok(point)
 }
@@ -443,7 +493,11 @@ pub fn cursor_target() -> Result<(u64, i32, i32), String> {
     let point = cursor_position()?;
     let hit = unsafe { WindowFromPoint(point) };
     if hit.is_null() {
-        return Err("指针下没有可检查的窗口；安全桌面可能不可访问".to_owned());
+        return Err(crate::locale::label(
+            "指针下没有可检查的窗口；安全桌面可能不可访问",
+            "No inspectable window under the pointer; the secure desktop may be inaccessible",
+        )
+        .to_owned());
     }
     let root = unsafe { GetAncestor(hit, GA_ROOT) };
     let mut target = if root.is_null() { hit } else { root };
@@ -475,7 +529,11 @@ pub fn cursor_target() -> Result<(u64, i32, i32), String> {
         target = child;
     }
     if unsafe { IsWindow(target) } == 0 {
-        return Err("指针下的窗口已关闭，请重新选取".to_owned());
+        return Err(crate::locale::label(
+            "指针下的窗口已关闭，请重新选取",
+            "The window under the pointer has closed; select it again",
+        )
+        .to_owned());
     }
     Ok((handle_value(target), point.x, point.y))
 }
@@ -494,12 +552,16 @@ pub fn sample_color() -> Result<ColorSample, String> {
     let point = cursor_position()?;
     let dc = unsafe { GetDC(null_mut()) };
     if dc.is_null() {
-        return Err("无法读取当前桌面的屏幕颜色".to_owned());
+        return Err(crate::locale::label(
+            "无法读取当前桌面的屏幕颜色",
+            "Could not read screen colors on the current desktop",
+        )
+        .to_owned());
     }
     let dc = ScreenDc(dc);
     let color = unsafe { GetPixel(dc.0, point.x, point.y) };
     if color == CLR_INVALID {
-        return Err("此坐标无法采样；受保护的画面或安全桌面可能不可读取".to_owned());
+        return Err(crate::locale::label("此坐标无法采样；受保护的画面或安全桌面可能不可读取", "This coordinate cannot be sampled; protected content or the secure desktop may be unreadable").to_owned());
     }
     Ok(ColorSample {
         x: point.x,
@@ -522,19 +584,30 @@ pub fn key_down(vk: u32) -> bool {
 pub fn window_identity(value: u64) -> Result<(u32, String), String> {
     let hwnd = checked_handle(value)?;
     if unsafe { IsWindow(hwnd) } == 0 {
-        return Err("窗口已关闭或句柄无效，请重新选取".to_owned());
+        return Err(crate::locale::label(
+            "窗口已关闭或句柄无效，请重新选取",
+            "The window has closed or its handle is invalid; select it again",
+        )
+        .to_owned());
     }
     let mut pid = 0;
     // Metadata queries only: no caption/control messages or process opening.
     let tid = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
     if tid == 0 || pid == 0 {
-        return Err(last_error("读取窗口身份"));
+        return Err(last_error(crate::locale::label(
+            "读取窗口身份",
+            "Read window identity",
+        )));
     }
     let class = class_name(hwnd)?;
     let mut final_pid = 0;
     let final_tid = unsafe { GetWindowThreadProcessId(hwnd, &mut final_pid) };
     if final_tid != tid || final_pid != pid || unsafe { IsWindow(hwnd) } == 0 {
-        return Err("读取身份期间窗口已关闭或发生变化，请重新选取".to_owned());
+        return Err(crate::locale::label(
+            "读取身份期间窗口已关闭或发生变化，请重新选取",
+            "The window closed or changed while reading its identity; select it again",
+        )
+        .to_owned());
     }
     Ok((pid, class))
 }
@@ -569,31 +642,53 @@ pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> 
     let (name, filter_text, extension_text) = match format {
         "json" => (
             "CoralSpyNext-window.json",
-            "JSON 文件 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0\0",
+            crate::locale::label(
+                "JSON 文件 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0\0",
+                "JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0\0",
+            ),
             "json\0",
         ),
         "html" | "htm" => (
             "CoralSpyNext-page.html",
-            "网页文件 (*.html)\0*.html;*.htm\0所有文件 (*.*)\0*.*\0\0",
+            crate::locale::label(
+                "网页文件 (*.html)\0*.html;*.htm\0所有文件 (*.*)\0*.*\0\0",
+                "HTML files (*.html)\0*.html;*.htm\0All files (*.*)\0*.*\0\0",
+            ),
             "html\0",
         ),
         "rtf" => (
             "CoralSpyNext-text.rtf",
-            "RTF 文件 (*.rtf)\0*.rtf\0所有文件 (*.*)\0*.*\0\0",
+            crate::locale::label(
+                "RTF 文件 (*.rtf)\0*.rtf\0所有文件 (*.*)\0*.*\0\0",
+                "RTF files (*.rtf)\0*.rtf\0All files (*.*)\0*.*\0\0",
+            ),
             "rtf\0",
         ),
         "txt" => (
             "CoralSpyNext-window.txt",
-            "文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0\0",
+            crate::locale::label(
+                "文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0\0",
+                "Text files (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0",
+            ),
             "txt\0",
         ),
-        _ => return Err("不支持的导出格式 / Unsupported export format".into()),
+        _ => {
+            return Err(crate::locale::label(
+                "不支持的导出格式 / Unsupported export format",
+                "Unsupported export format",
+            )
+            .into())
+        }
     };
     if SAVE_DIALOG_OPEN
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return Err("已有一个保存对话框打开，请先完成或取消它".to_owned());
+        return Err(crate::locale::label(
+            "已有一个保存对话框打开，请先完成或取消它",
+            "A save dialog is already open; finish or cancel it first",
+        )
+        .to_owned());
     }
     let _guard = SaveDialogGuard;
     let mut file = vec![0u16; 32_768];
@@ -602,7 +697,12 @@ pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> 
     }
     let filter: Vec<u16> = filter_text.encode_utf16().collect();
     let extension: Vec<u16> = extension_text.encode_utf16().collect();
-    let title: Vec<u16> = "导出 CoralSpyNext 检查结果\0".encode_utf16().collect();
+    let title: Vec<u16> = crate::locale::label(
+        "导出 CoralSpyNext 检查结果\0",
+        "Export CoralSpyNext inspection results\0",
+    )
+    .encode_utf16()
+    .collect();
     let foreground = unsafe { GetForegroundWindow() };
     let mut owner_pid = 0;
     if !foreground.is_null() {
@@ -633,15 +733,21 @@ pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> 
         return if error == 0 {
             Ok(None)
         } else {
-            Err(format!("保存对话框失败（通用对话框错误 0x{error:08X}）"))
+            Err(crate::localized_format!(
+                "保存对话框失败（通用对话框错误 0x{error:08X}）",
+                "Save dialog failed (common dialog error 0x{error:08X})"
+            ))
         };
     }
-    let length = file
-        .iter()
-        .position(|unit| *unit == 0)
-        .ok_or_else(|| "保存路径缺少结束符".to_owned())?;
+    let length = file.iter().position(|unit| *unit == 0).ok_or_else(|| {
+        crate::locale::label(
+            "保存路径缺少结束符",
+            "The save path is missing its terminator",
+        )
+        .to_owned()
+    })?;
     if length == 0 {
-        return Err("未选择保存路径".to_owned());
+        return Err(crate::locale::label("未选择保存路径", "No save path was selected").to_owned());
     }
     // Preserve even non-Unicode Windows paths for I/O; lossy conversion is
     // used only in the success message, not for choosing the output file.
@@ -656,7 +762,9 @@ pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> 
     } else {
         text.to_owned()
     };
-    std::fs::write(&path, exported.as_bytes()).map_err(|error| format!("无法保存文件：{error}"))?;
+    std::fs::write(&path, exported.as_bytes()).map_err(|error| {
+        crate::localized_format!("无法保存文件：{error}", "Could not save the file: {error}")
+    })?;
     if html {
         // Best effort Internet-zone ADS; the HTML Mark-of-the-Web above remains
         // on file systems without alternate data streams. Do not execute HTML.

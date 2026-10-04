@@ -108,7 +108,12 @@ const FRAME_LIMIT: usize = 64;
 const WIRE_LIMIT: usize = 16 * 1_048_576;
 const WORKER_TIMEOUT: Duration = Duration::from_secs(8);
 const WALK_TIMEOUT: Duration = Duration::from_secs(4);
-const PROTECTED: &str = "[密码内容受保护，未读取]";
+fn protected_label() -> &'static str {
+    crate::locale::label(
+        "[密码内容受保护，未读取]",
+        "[Password content protected; not read]",
+    )
+}
 const IID_HTML_DOCUMENT2: GUID = GUID::from_u128(0x332c4425_26cb_11d0_b483_00c04fd90119);
 const SID_WEB_BROWSER_APP: GUID = GUID::from_u128(0x0002df05_0000_0000_c000_000000000046);
 const SID_TOP_LEVEL_BROWSER: GUID = GUID::from_u128(0x4c96be40_915c_11cf_99d3_00aa004ae837);
@@ -120,24 +125,41 @@ struct WindowIdentity {
     class: String,
 }
 fn identity(hwnd: u64) -> Result<WindowIdentity, String> {
-    let value = usize::try_from(hwnd).map_err(|_| "窗口句柄超出指针宽度")?;
+    let value = usize::try_from(hwnd).map_err(|_| {
+        crate::locale::label(
+            "窗口句柄超出指针宽度",
+            "The window handle exceeds the pointer width",
+        )
+    })?;
     let handle = value as windows_sys::Win32::Foundation::HWND;
     if value == 0 || unsafe { IsWindow(handle) } == 0 {
-        return Err("窗口已关闭或句柄无效".into());
+        return Err(crate::locale::label(
+            "窗口已关闭或句柄无效",
+            "The window has closed or its handle is invalid",
+        )
+        .into());
     }
     let mut pid = 0;
     let tid = unsafe { GetWindowThreadProcessId(handle, &mut pid) };
     let mut name = [0u16; 256];
     let count = unsafe { GetClassNameW(handle, name.as_mut_ptr(), name.len() as i32) };
     if tid == 0 || pid == 0 || count <= 0 {
-        return Err("无法确认所选窗口的身份".into());
+        return Err(crate::locale::label(
+            "无法确认所选窗口的身份",
+            "Could not verify the selected window's identity",
+        )
+        .into());
     }
     let class = String::from_utf16_lossy(&name[..count as usize]);
     if class != "Internet Explorer_Server" {
-        return Err(format!("此窗口的类为 {class}，未暴露旧版 MSHTML 接口。IE / IE2 仅兼容已存在的 Internet Explorer_Server 控件；现代 Edge、Chrome、Firefox 和 WebView2 不支持此通道。可在内容页尝试 UI Automation。"));
+        return Err(crate::localized_format!("此窗口的类为 {class}，未暴露旧版 MSHTML 接口。IE / IE2 仅兼容已存在的 Internet Explorer_Server 控件；现代 Edge、Chrome、Firefox 和 WebView2 不支持此通道。可在内容页尝试 UI Automation。", "This window's class is {class}; it does not expose the legacy MSHTML interface. IE / IE2 supports only existing Internet Explorer_Server controls. Modern Edge, Chrome, Firefox, and WebView2 do not support this channel. Try UI Automation on the Content page."));
     }
     if pid == unsafe { GetCurrentProcessId() } {
-        return Err("不检查检查器自身的 HTML 控件".into());
+        return Err(crate::locale::label(
+            "不检查检查器自身的 HTML 控件",
+            "The inspector's own HTML controls are not inspected",
+        )
+        .into());
     }
     Ok(WindowIdentity { pid, tid, class })
 }
@@ -146,11 +168,19 @@ fn identity(hwnd: u64) -> Result<WindowIdentity, String> {
 /// startup and serialize one `Result<LegacySnapshot, String>` to stdout.
 pub fn inspect(hwnd: u64, frame: Option<usize>) -> Result<LegacySnapshot, String> {
     let bytes = run_worker(hwnd, frame, None)?;
-    let result: Result<LegacySnapshot, String> =
-        serde_json::from_slice(&bytes).map_err(|e| format!("MSHTML 检查结果格式无效：{e}"))?;
+    let result: Result<LegacySnapshot, String> = serde_json::from_slice(&bytes).map_err(|e| {
+        crate::localized_format!(
+            "MSHTML 检查结果格式无效：{e}",
+            "Invalid MSHTML inspection result format: {e}"
+        )
+    })?;
     let snapshot = result?;
     if snapshot.hwnd != hwnd {
-        return Err("MSHTML 检查结果与所选窗口不一致".into());
+        return Err(crate::locale::label(
+            "MSHTML 检查结果与所选窗口不一致",
+            "The MSHTML inspection result does not match the selected window",
+        )
+        .into());
     }
     Ok(snapshot)
 }
@@ -158,7 +188,12 @@ pub fn inspect(hwnd: u64, frame: Option<usize>) -> Result<LegacySnapshot, String
 /// `--legacy-action-worker <hwnd> <top|frame> <action>` to action_in_process.
 pub fn action(hwnd: u64, frame: Option<usize>, requested: LegacyAction) -> Result<String, String> {
     let bytes = run_worker(hwnd, frame, Some(requested))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("MSHTML 操作结果格式无效：{e}"))?
+    serde_json::from_slice(&bytes).map_err(|e| {
+        crate::localized_format!(
+            "MSHTML 操作结果格式无效：{e}",
+            "Invalid MSHTML action result format: {e}"
+        )
+    })?
 }
 fn run_worker(
     hwnd: u64,
@@ -167,7 +202,11 @@ fn run_worker(
 ) -> Result<Vec<u8>, String> {
     let before = identity(hwnd)?;
     if frame.is_some_and(|index| index >= FRAME_LIMIT) {
-        return Err("框架序号超过 64 个框架的检查上限".into());
+        return Err(crate::locale::label(
+            "框架序号超过 64 个框架的检查上限",
+            "The frame index exceeds the 64-frame inspection limit",
+        )
+        .into());
     }
     let mut args = vec![
         hwnd.to_string(),
@@ -187,7 +226,7 @@ fn run_worker(
         WORKER_TIMEOUT,
     )?;
     if identity(hwnd)? != before {
-        return Err("操作期间所选窗口已改变，请重新选取。若已请求导航，请先查看目标窗口。".into());
+        return Err(crate::locale::label("操作期间所选窗口已改变，请重新选取。若已请求导航，请先查看目标窗口。", "The selected window changed during the action; select it again. If navigation was requested, check the target window first.").into());
     }
     Ok(bytes)
 }
@@ -198,8 +237,14 @@ fn bounded_worker(
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
     use std::io::Write;
-    let exe = std::env::current_exe().map_err(|e| format!("无法定位检查程序：{e}"))?;
+    let exe = std::env::current_exe().map_err(|e| {
+        crate::localized_format!(
+            "无法定位检查程序：{e}",
+            "Could not locate the inspector executable: {e}"
+        )
+    })?;
     let mut child = Command::new(exe)
+        .env("CORALSPYNEXT_LANG", crate::locale::language_code())
         .arg(flag)
         .args(args)
         .stdin(if input.is_some() {
@@ -211,7 +256,12 @@ fn bounded_worker(
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| format!("无法启动辅助进程：{e}"))?;
+        .map_err(|e| {
+            crate::localized_format!(
+                "无法启动辅助进程：{e}",
+                "Could not start the helper process: {e}"
+            )
+        })?;
     // All legacy helpers share this spawn path. The job remains owned until
     // after kill/wait/reap, and Windows terminates it if the GUI exits first.
     let _job_guard = match crate::helper_guard::bind_child(&child) {
@@ -228,12 +278,18 @@ fn bounded_worker(
         if input.len() > 65536 {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("辅助请求过大".into());
+            return Err(
+                crate::locale::label("辅助请求过大", "The helper request is too large").into(),
+            );
         }
         let Some(mut stdin) = child.stdin.take() else {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("无法写入辅助进程".into());
+            return Err(crate::locale::label(
+                "无法写入辅助进程",
+                "Could not write to the helper process",
+            )
+            .into());
         };
         let input = input.to_vec();
         match thread::Builder::new()
@@ -244,7 +300,10 @@ fn bounded_worker(
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("创建请求线程失败：{e}"));
+                return Err(crate::localized_format!(
+                    "创建请求线程失败：{e}",
+                    "Could not create the request thread: {e}"
+                ));
             }
         }
     } else {
@@ -256,7 +315,11 @@ fn bounded_worker(
         if let Some(writer) = writer {
             let _ = writer.join();
         }
-        return Err("无法读取辅助进程输出".into());
+        return Err(crate::locale::label(
+            "无法读取辅助进程输出",
+            "Could not read helper process output",
+        )
+        .into());
     };
     let overflow = Arc::new(AtomicBool::new(false));
     let over = Arc::clone(&overflow);
@@ -271,9 +334,9 @@ fn bounded_worker(
             if bytes.len() > WIRE_LIMIT {
                 over.store(true, Ordering::Release);
             }
-            result
-                .map(|_| bytes)
-                .map_err(|e| format!("读取结果失败：{e}"))
+            result.map(|_| bytes).map_err(|e| {
+                crate::localized_format!("读取结果失败：{e}", "Could not read the result: {e}")
+            })
         }) {
         Ok(reader) => reader,
         Err(e) => {
@@ -282,29 +345,42 @@ fn bounded_worker(
             if let Some(writer) = writer {
                 let _ = writer.join();
             }
-            return Err(format!("创建读取线程失败：{e}"));
+            return Err(crate::localized_format!(
+                "创建读取线程失败：{e}",
+                "Could not create the reader thread: {e}"
+            ));
         }
     };
     let started = Instant::now();
     let status = loop {
         if overflow.load(Ordering::Acquire) {
-            break Err("返回结果超过安全大小上限".to_owned());
+            break Err(crate::locale::label(
+                "返回结果超过安全大小上限",
+                "The returned result exceeds the safety size limit",
+            )
+            .to_owned());
         }
         if started.elapsed() >= timeout {
             let detail = if flag == "--legacy-download-worker" {
-                "下载已停止，未替换目标文件；临时片段将被清理。"
+                crate::locale::label("下载已停止，未替换目标文件；临时片段将被清理。", "The download was stopped without replacing the destination file; temporary fragments will be cleaned up.")
             } else {
-                "若请求了导航或高亮，可能已有部分变化；请先检查目标窗口。"
+                crate::locale::label("若请求了导航或高亮，可能已有部分变化；请先检查目标窗口。", "If navigation or highlighting was requested, partial changes may already have occurred; check the target window first.")
             };
-            break Err(format!(
+            break Err(crate::localized_format!(
                 "辅助进程在 {} 秒内未完成，已停止。{detail}",
+                "The helper process did not finish within {} seconds and was stopped. {detail}",
                 timeout.as_secs()
             ));
         }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(e) => break Err(format!("等待进程失败：{e}")),
+            Err(e) => {
+                break Err(crate::localized_format!(
+                    "等待进程失败：{e}",
+                    "Could not wait for the process: {e}"
+                ))
+            }
         }
     };
     if status.is_err() {
@@ -312,19 +388,32 @@ fn bounded_worker(
     }
     let _ = child.wait();
     let write_result = writer.map(|writer| writer.join());
-    let bytes = reader.join().map_err(|_| "输出读取线程异常")?;
+    let bytes = reader
+        .join()
+        .map_err(|_| crate::locale::label("输出读取线程异常", "The output reader thread failed"))?;
     let status = status?;
     if let Some(result) = write_result {
         result
-            .map_err(|_| "请求写入线程异常")?
-            .map_err(|e| format!("写入请求失败：{e}"))?;
+            .map_err(|_| {
+                crate::locale::label("请求写入线程异常", "The request writer thread failed")
+            })?
+            .map_err(|e| {
+                crate::localized_format!("写入请求失败：{e}", "Could not write the request: {e}")
+            })?;
     }
     if !status.success() {
-        return Err(format!("辅助进程异常退出：{status}"));
+        return Err(crate::localized_format!(
+            "辅助进程异常退出：{status}",
+            "The helper process exited abnormally: {status}"
+        ));
     }
     let bytes = bytes?;
     if bytes.len() > WIRE_LIMIT {
-        return Err("结果超过安全大小上限".into());
+        return Err(crate::locale::label(
+            "结果超过安全大小上限",
+            "The result exceeds the safety size limit",
+        )
+        .into());
     }
     Ok(bytes)
 }
@@ -334,7 +423,12 @@ impl Apartment {
     fn new() -> Result<Self, String> {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
             .ok()
-            .map_err(|e| format!("无法初始化 MSHTML COM STA：{e}"))?;
+            .map_err(|e| {
+                crate::localized_format!(
+                    "无法初始化 MSHTML COM STA：{e}",
+                    "Could not initialize MSHTML COM STA: {e}"
+                )
+            })?;
         Ok(Self)
     }
 }
@@ -349,7 +443,11 @@ fn document(hwnd: u64) -> Result<IDispatch, String> {
     let message_name: Vec<u16> = "WM_HTML_GETOBJECT\0".encode_utf16().collect();
     let message = unsafe { RegisterWindowMessageW(message_name.as_ptr()) };
     if message == 0 {
-        return Err("无法注册旧版 MSHTML 查询消息".into());
+        return Err(crate::locale::label(
+            "无法注册旧版 MSHTML 查询消息",
+            "Could not register the legacy MSHTML query message",
+        )
+        .into());
     }
     let mut result = 0usize;
     let ok = unsafe {
@@ -364,7 +462,7 @@ fn document(hwnd: u64) -> Result<IDispatch, String> {
         )
     };
     if ok == 0 || result == 0 {
-        return Err("所选 MSHTML 控件未返回文档接口。可能不支持此历史兼容通道、未加载文档、已挂起或拒绝访问；不会绕过权限。".into());
+        return Err(crate::locale::label("所选 MSHTML 控件未返回文档接口。可能不支持此历史兼容通道、未加载文档、已挂起或拒绝访问；不会绕过权限。", "The selected MSHTML control did not return a document interface. It may not support this legacy channel, may have no loaded document, may be hung, or may deny access. Permissions will not be bypassed.").into());
     }
     let mut raw = std::ptr::null_mut();
     unsafe {
@@ -375,16 +473,28 @@ fn document(hwnd: u64) -> Result<IDispatch, String> {
             &mut raw,
         )
     }
-    .map_err(|e| format!("无法取得 MSHTML 文档接口：{e}"))?;
+    .map_err(|e| {
+        crate::localized_format!(
+            "无法取得 MSHTML 文档接口：{e}",
+            "Could not obtain the MSHTML document interface: {e}"
+        )
+    })?;
     if raw.is_null() {
-        return Err("MSHTML 返回了空文档接口".into());
+        return Err(crate::locale::label(
+            "MSHTML 返回了空文档接口",
+            "MSHTML returned a null document interface",
+        )
+        .into());
     }
     // Every COM interface starts with IUnknown. Obtain a real IDispatch via QI
     // rather than treating an arbitrary pointer as an undocumented DOM vtable.
     let unknown = unsafe { IUnknown::from_raw(raw) };
-    unknown
-        .cast::<IDispatch>()
-        .map_err(|e| format!("文档没有 IDispatch 接口：{e}"))
+    unknown.cast::<IDispatch>().map_err(|e| {
+        crate::localized_format!(
+            "文档没有 IDispatch 接口：{e}",
+            "The document has no IDispatch interface: {e}"
+        )
+    })
 }
 fn invoke(
     object: &IDispatch,
@@ -396,8 +506,13 @@ fn invoke(
     let name_ptr = PCWSTR(name.as_ptr());
     let mut id = 0;
     let empty = GUID::zeroed();
-    unsafe { object.GetIDsOfNames(&empty, &name_ptr, 1, 0, &mut id) }
-        .map_err(|e| format!("{member} 不可用（{}）", e.code()))?;
+    unsafe { object.GetIDsOfNames(&empty, &name_ptr, 1, 0, &mut id) }.map_err(|e| {
+        crate::localized_format!(
+            "{member} 不可用（{}）",
+            "{member} is unavailable ({})",
+            e.code()
+        )
+    })?;
     let mut args: Vec<VARIANT> = args.into_iter().rev().collect();
     let params = DISPPARAMS {
         rgvarg: args.as_mut_ptr(),
@@ -407,7 +522,13 @@ fn invoke(
     let mut output = VARIANT::new();
     // Do not include provider exception strings: they can contain page content.
     unsafe { object.Invoke(id, &empty, 0, flags, &params, Some(&mut output), None, None) }
-        .map_err(|e| format!("{member} 读取或操作失败（{}）", e.code()))?;
+        .map_err(|e| {
+            crate::localized_format!(
+                "{member} 读取或操作失败（{}）",
+                "Reading or invoking {member} failed ({})",
+                e.code()
+            )
+        })?;
     Ok(output)
 }
 fn get(object: &IDispatch, name: &str) -> Result<VARIANT, String> {
@@ -423,17 +544,32 @@ fn dispatch(value: &VARIANT) -> Result<IDispatch, String> {
             // VT_DISPATCH; borrowed pointer is cloned before variant drops.
             return IDispatch::from_raw_borrowed(&raw.Anonymous.pdispVal)
                 .cloned()
-                .ok_or_else(|| "DOM 返回空对象".into());
+                .ok_or_else(|| {
+                    crate::locale::label("DOM 返回空对象", "DOM returned a null object").into()
+                });
         }
         if raw.vt == 13 {
             // VT_UNKNOWN
             return IUnknown::from_raw_borrowed(&raw.Anonymous.punkVal)
-                .ok_or("DOM 返回空对象")?
+                .ok_or(crate::locale::label(
+                    "DOM 返回空对象",
+                    "DOM returned a null object",
+                ))?
                 .cast()
-                .map_err(|e| format!("DOM 对象无 IDispatch：{}", e.code()));
+                .map_err(|e| {
+                    crate::localized_format!(
+                        "DOM 对象无 IDispatch：{}",
+                        "The DOM object has no IDispatch: {}",
+                        e.code()
+                    )
+                });
         }
     }
-    Err("DOM 返回值不是对象".into())
+    Err(crate::locale::label(
+        "DOM 返回值不是对象",
+        "The DOM return value is not an object",
+    )
+    .into())
 }
 fn object(object: &IDispatch, name: &str) -> Result<IDispatch, String> {
     dispatch(&get(object, name)?)
@@ -442,9 +578,12 @@ fn string_value(value: &VARIANT, limit: usize) -> Result<String, String> {
     // Avoid VariantChangeType on VT_DISPATCH: conversion can invoke arbitrary
     // default members. Only a genuine BSTR is eligible as a text result.
     if unsafe { value.as_raw().Anonymous.Anonymous.vt } != 8 {
-        return Err("DOM 返回值不是文本".into());
+        return Err(
+            crate::locale::label("DOM 返回值不是文本", "The DOM return value is not text").into(),
+        );
     }
-    let value = BSTR::try_from(value).map_err(|_| "无法读取 DOM 文本")?;
+    let value = BSTR::try_from(value)
+        .map_err(|_| crate::locale::label("无法读取 DOM 文本", "Could not read DOM text"))?;
     let text: String = char::decode_utf16(value.as_wide().iter().copied().take(limit))
         .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect();
@@ -458,15 +597,19 @@ fn text(object: &IDispatch, name: &str) -> Result<String, String> {
 fn url_text(object: &IDispatch, name: &str) -> Result<String, String> {
     let value = get(object, name)?;
     if unsafe { value.as_raw().Anonymous.Anonymous.vt } != 8 {
-        return Err("资源地址不是文本".into());
+        return Err(
+            crate::locale::label("资源地址不是文本", "The resource address is not text").into(),
+        );
     }
-    let value = BSTR::try_from(&value).map_err(|_| "无法读取资源地址")?;
+    let value = BSTR::try_from(&value).map_err(|_| {
+        crate::locale::label("无法读取资源地址", "Could not read the resource address")
+    })?;
     if value.len() > 8192 {
-        return Err("资源地址超过 8192 字符，已跳过以避免截断后下载错误地址".into());
+        return Err(crate::locale::label("资源地址超过 8192 字符，已跳过以避免截断后下载错误地址", "The resource address exceeds 8192 characters; it was skipped to avoid downloading an incorrectly truncated address").into());
     }
     let text = String::from_utf16_lossy(value.as_wide());
     if text.len() > 8192 {
-        return Err("资源地址超过 8192 字节，已跳过以避免截断后下载错误地址".into());
+        return Err(crate::locale::label("资源地址超过 8192 字节，已跳过以避免截断后下载错误地址", "The resource address exceeds 8192 bytes; it was skipped to avoid downloading an incorrectly truncated address").into());
     }
     Ok(text)
 }
@@ -477,10 +620,17 @@ fn count(object: &IDispatch) -> Result<usize, String> {
         unsafe { value.as_raw().Anonymous.Anonymous.vt },
         2 | 3 | 17 | 18 | 19 | 22 | 23
     ) {
-        return Err("DOM 集合长度不是整数".into());
+        return Err(crate::locale::label(
+            "DOM 集合长度不是整数",
+            "The DOM collection length is not an integer",
+        )
+        .into());
     }
-    let value = i32::try_from(&value).map_err(|_| "DOM 集合长度无效")?;
-    usize::try_from(value).map_err(|_| "DOM 集合长度无效".into())
+    let value = i32::try_from(&value)
+        .map_err(|_| crate::locale::label("DOM 集合长度无效", "Invalid DOM collection length"))?;
+    usize::try_from(value).map_err(|_| {
+        crate::locale::label("DOM 集合长度无效", "Invalid DOM collection length").into()
+    })
 }
 fn item(collection: &IDispatch, index: usize) -> Result<IDispatch, String> {
     dispatch(&invoke(
@@ -551,28 +701,47 @@ fn browser(document: &IDispatch) -> Result<IDispatch, String> {
                 })?
                 .cast()
         })
-        .map_err(|_| "宿主未暴露浏览器服务；此操作不可用".to_owned())?;
+        .map_err(|_| {
+            crate::locale::label(
+                "宿主未暴露浏览器服务；此操作不可用",
+                "The host does not expose a browser service; this action is unavailable",
+            )
+            .to_owned()
+        })?;
     if let Ok(browser) = unsafe { provider.QueryService::<IDispatch>(&SID_WEB_BROWSER_APP) } {
         return Ok(browser);
     }
     let top = unsafe { provider.QueryService::<IServiceProvider>(&SID_TOP_LEVEL_BROWSER) }
-        .map_err(|_| "宿主未暴露顶层浏览器服务；此操作不可用")?;
+        .map_err(|_| {
+            crate::locale::label(
+                "宿主未暴露顶层浏览器服务；此操作不可用",
+                "The host does not expose a top-level browser service; this action is unavailable",
+            )
+        })?;
     unsafe { top.QueryService::<IDispatch>(&SID_WEB_BROWSER_APP) }
-        .map_err(|_| "宿主没有公开 WebBrowser 应用接口；此操作不可用".into())
+        .map_err(|_| crate::locale::label("宿主没有公开 WebBrowser 应用接口；此操作不可用", "The host does not expose the WebBrowser application interface; this action is unavailable").into())
 }
 fn selected_document(top: &IDispatch, frame: Option<usize>) -> Result<IDispatch, String> {
     match frame {
         None => Ok(top.clone()),
         Some(index) => {
             if index >= FRAME_LIMIT {
-                return Err("框架序号超过检查上限".into());
+                return Err(crate::locale::label(
+                    "框架序号超过检查上限",
+                    "The frame index exceeds the inspection limit",
+                )
+                .into());
             }
             let frames = object(top, "frames")?;
             if index >= count(&frames)? {
-                return Err("此框架已不存在，请重新检查".into());
+                return Err(crate::locale::label(
+                    "此框架已不存在，请重新检查",
+                    "This frame no longer exists; inspect it again",
+                )
+                .into());
             }
             object(&item(&frames, index)?, "document")
-                .map_err(|e| format!("无法读取框架 {index}：{e}。跨域和宿主限制不会被绕过。"))
+                .map_err(|e| crate::localized_format!("无法读取框架 {index}：{e}。跨域和宿主限制不会被绕过。", "Could not read frame {index}: {e}. Cross-origin and host restrictions will not be bypassed."))
         }
     }
 }
@@ -588,20 +757,23 @@ pub fn inspect_in_process(hwnd: u64, frame: Option<usize>) -> Result<LegacySnaps
         application: process_path(hwnd),
         ..Default::default()
     };
-    warning(&mut snapshot.warnings, "此页使用历史 MSHTML 兼容接口，只适用于宿主已有的 Internet Explorer_Server；不会安装或恢复 IE / Flash。");
+    warning(&mut snapshot.warnings, crate::locale::label("此页使用历史 MSHTML 兼容接口，只适用于宿主已有的 Internet Explorer_Server；不会安装或恢复 IE / Flash。", "This page uses the legacy MSHTML compatibility interface, only for a host's existing Internet Explorer_Server control. IE / Flash will not be installed or restored."));
     match object(&top, "frames").and_then(|frames| Ok((count(&frames)?, frames))) {
         Ok((length, frames)) => {
             if length > FRAME_LIMIT {
                 warning(
                     &mut snapshot.warnings,
-                    "仅列出前 64 个直接子框架；不会递归遍历框架。",
+                    crate::locale::label("仅列出前 64 个直接子框架；不会递归遍历框架。", "Only the first 64 direct child frames are listed; frames are not traversed recursively."),
                 );
             }
             for index in 0..length.min(FRAME_LIMIT) {
                 if started.elapsed() >= WALK_TIMEOUT {
                     warning(
                         &mut snapshot.warnings,
-                        "框架枚举达到时间上限，列表可能不完整。",
+                        crate::locale::label(
+                            "框架枚举达到时间上限，列表可能不完整。",
+                            "Frame enumeration reached its time limit; the list may be incomplete.",
+                        ),
                     );
                     break;
                 }
@@ -609,19 +781,28 @@ pub fn inspect_in_process(hwnd: u64, frame: Option<usize>) -> Result<LegacySnaps
                     .and_then(|frame| text(&frame, "name"))
                     .unwrap_or_default();
                 snapshot.frames.push(if name.is_empty() {
-                    format!("框架 {}", index + 1)
+                    crate::localized_format!("框架 {}", "Frame {}", index + 1)
                 } else {
                     format!("{} · {name}", index + 1)
                 });
             }
         }
-        Err(error) => warning(&mut snapshot.warnings, format!("无法列出框架：{error}")),
+        Err(error) => warning(
+            &mut snapshot.warnings,
+            crate::localized_format!("无法列出框架：{error}", "Could not list frames: {error}"),
+        ),
     }
     let selected = selected_document(&top, frame)?;
     snapshot.location = property(&selected, "URL", &mut snapshot.warnings);
     snapshot.title = property(&selected, "title", &mut snapshot.warnings);
     if snapshot.application.is_empty() {
-        warning(&mut snapshot.warnings, "无法读取宿主可执行文件路径。");
+        warning(
+            &mut snapshot.warnings,
+            crate::locale::label(
+                "无法读取宿主可执行文件路径。",
+                "Could not read the host executable path.",
+            ),
+        );
     }
     // Take a detached deep clone, then classify/read only this inert snapshot.
     // No event handler, script, navigation, DOM insertion, or page mutation is
@@ -632,11 +813,15 @@ pub fn inspect_in_process(hwnd: u64, frame: Option<usize>) -> Result<LegacySnaps
         Ok(root) => inspect_clone(&root, &started, &mut snapshot),
         Err(error) => warning(
             &mut snapshot.warnings,
-            format!("无法创建安全的脱离 DOM 副本，已跳过源码、链接和表单：{error}"),
+            crate::localized_format!("无法创建安全的脱离 DOM 副本，已跳过源码、链接和表单：{error}", "Could not create a safe detached DOM copy; source, links, and forms were skipped: {error}"),
         ),
     }
     if identity(hwnd)? != before {
-        return Err("检查期间目标窗口身份已改变；结果已丢弃".into());
+        return Err(crate::locale::label(
+            "检查期间目标窗口身份已改变；结果已丢弃",
+            "The target window's identity changed during inspection; results were discarded",
+        )
+        .into());
     }
     Ok(snapshot)
 }
@@ -679,7 +864,7 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
                 source_safe = false;
                 warning(
                     &mut snapshot.warnings,
-                    "输入控件超过 5000 个；表单已截断，无法完成密码检测，源码已隐藏。",
+                    crate::locale::label("输入控件超过 5000 个；表单已截断，无法完成密码检测，源码已隐藏。", "There are more than 5000 input controls; the form list was truncated, password detection could not finish, and source was hidden."),
                 );
             }
             for index in 0..length.min(ITEM_LIMIT) {
@@ -704,13 +889,13 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
                             }
                         };
                         let value = if protected {
-                            PROTECTED.into()
+                            protected_label().into()
                         } else {
                             match text(&input, "value") {
                                 Ok(value) => limits.take(value),
                                 Err(error) => {
                                     warning(&mut snapshot.warnings, error);
-                                    "[无法读取]".into()
+                                    crate::locale::label("[无法读取]", "[Unreadable]").into()
                                 }
                             }
                         };
@@ -725,7 +910,7 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
                         source_safe = false;
                         warning(
                             &mut snapshot.warnings,
-                            format!("输入控件未能检查，源码已隐藏：{error}"),
+                            crate::localized_format!("输入控件未能检查，源码已隐藏：{error}", "An input control could not be inspected; source was hidden: {error}"),
                         );
                     }
                 }
@@ -735,7 +920,10 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
             source_safe = false;
             warning(
                 &mut snapshot.warnings,
-                format!("未能确认密码输入状态，源码已隐藏：{error}"),
+                crate::localized_format!(
+                    "未能确认密码输入状态，源码已隐藏：{error}",
+                    "Password input state could not be verified; source was hidden: {error}"
+                ),
             );
         }
     }
@@ -744,9 +932,13 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
     if source_safe && limits.available() {
         match get(root, "outerHTML").and_then(|value| {
             if unsafe { value.as_raw().Anonymous.Anonymous.vt } != 8 {
-                return Err("源码不是字符串".into());
+                return Err(
+                    crate::locale::label("源码不是字符串", "The source is not a string").into(),
+                );
             }
-            let source = BSTR::try_from(&value).map_err(|_| "无法读取 HTML 字符串")?;
+            let source = BSTR::try_from(&value).map_err(|_| {
+                crate::locale::label("无法读取 HTML 字符串", "Could not read the HTML string")
+            })?;
             let units = source.len();
             let text: String =
                 char::decode_utf16(source.as_wide().iter().copied().take(SOURCE_LIMIT))
@@ -758,18 +950,27 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
             Ok((source, truncated)) => {
                 snapshot.source = source;
                 if truncated {
-                    warning(&mut snapshot.warnings, "HTML 源码已截断至 1 MiB。");
+                    warning(
+                        &mut snapshot.warnings,
+                        crate::locale::label(
+                            "HTML 源码已截断至 1 MiB。",
+                            "HTML source was truncated to 1 MiB.",
+                        ),
+                    );
                 }
             }
             Err(error) => warning(
                 &mut snapshot.warnings,
-                format!("无法读取 HTML 源码：{error}"),
+                crate::localized_format!(
+                    "无法读取 HTML 源码：{error}",
+                    "Could not read HTML source: {error}"
+                ),
             ),
         }
     } else {
         warning(
             &mut snapshot.warnings,
-            "检测到密码输入控件，或未能完整确认其状态：整份 HTML 源码已隐藏，密码值从未请求。",
+            crate::locale::label("检测到密码输入控件，或未能完整确认其状态：整份 HTML 源码已隐藏，密码值从未请求。", "A password input control was detected or its state could not be fully verified: all HTML source was hidden, and password values were never requested."),
         );
     }
     for tag in ["textarea", "select", "button"] {
@@ -782,7 +983,10 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
                 if length > remaining {
                     warning(
                         &mut snapshot.warnings,
-                        "表单字段达到 5000 项上限，列表已截断。",
+                        crate::locale::label(
+                            "表单字段达到 5000 项上限，列表已截断。",
+                            "The form field list reached the 5000-item limit and was truncated.",
+                        ),
                     );
                 }
                 for index in 0..length.min(remaining) {
@@ -807,12 +1011,15 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
             }
             Err(error) => warning(
                 &mut snapshot.warnings,
-                format!("{tag} 表单字段不可用：{error}"),
+                crate::localized_format!(
+                    "{tag} 表单字段不可用：{error}",
+                    "{tag} form fields are unavailable: {error}"
+                ),
             ),
         }
     }
     if !snapshot.forms.is_empty() {
-        warning(&mut snapshot.warnings, "表单值来自脱离 DOM 的副本；某些旧宿主的克隆只保留默认值，未必保留刚修改的实时值。单个文本限 4096 字节。");
+        warning(&mut snapshot.warnings, crate::locale::label("表单值来自脱离 DOM 的副本；某些旧宿主的克隆只保留默认值，未必保留刚修改的实时值。单个文本限 4096 字节。", "Form values come from a detached DOM copy. Some legacy hosts preserve only default values in clones, rather than recently edited live values. Each text value is limited to 4096 bytes."));
     }
     for (tag, url_property, default_kind) in [
         ("a", "href", "link"),
@@ -833,7 +1040,7 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
                 if length > remaining {
                     warning(
                         &mut snapshot.warnings,
-                        "链接与资源达到 5000 项上限，列表已截断。",
+                        crate::locale::label("链接与资源达到 5000 项上限，列表已截断。", "The links and resources list reached the 5000-item limit and was truncated."),
                     );
                 }
                 for index in 0..length.min(remaining) {
@@ -898,20 +1105,23 @@ fn inspect_clone(root: &IDispatch, started: &Instant, snapshot: &mut LegacySnaps
             }
             Err(error) => warning(
                 &mut snapshot.warnings,
-                format!("{tag} 资源列表不可用：{error}"),
+                crate::localized_format!(
+                    "{tag} 资源列表不可用：{error}",
+                    "The {tag} resource list is unavailable: {error}"
+                ),
             ),
         }
     }
     if limits.stopped {
         warning(
             &mut snapshot.warnings,
-            "DOM 检查达到 4 秒或文本总量 1 MiB 上限；部分内容未读取。",
+            crate::locale::label("DOM 检查达到 4 秒或文本总量 1 MiB 上限；部分内容未读取。", "DOM inspection reached the 4-second or 1 MiB total-text limit; some content was not read."),
         );
     }
     if snapshot.links.iter().any(|link| link.kind == "flash") {
         warning(
             &mut snapshot.warnings,
-            "Flash 项仅为页面已有的资源地址；不加载、播放、启用或安装 Flash。",
+            crate::locale::label("Flash 项仅为页面已有的资源地址；不加载、播放、启用或安装 Flash。", "Flash items are only resource addresses already present in the page; Flash is not loaded, played, enabled, or installed."),
         );
     }
 }
@@ -997,7 +1207,7 @@ pub fn action_in_process(
 ) -> Result<String, String> {
     identity(hwnd)?;
     if matches!(requested, LegacyAction::Highlight) {
-        return Err("页面高亮需要文字、前景色、背景色与粗体参数。请使用 IE 页的文字高亮按钮；此无参数导航命令不能执行高亮。".into());
+        return Err(crate::locale::label("页面高亮需要文字、前景色、背景色与粗体参数。请使用 IE 页的文字高亮按钮；此无参数导航命令不能执行高亮。", "Page highlighting requires text, foreground color, background color, and bold parameters. Use the text-highlight button on the IE page; this parameterless navigation command cannot highlight text.").into());
     }
     let _apartment = Apartment::new()?;
     let top = document(hwnd)?;
@@ -1016,8 +1226,7 @@ pub fn action_in_process(
                 LegacyAction::Highlight => unreachable!(),
             };
             method(&browser, member, vec![])?;
-            return Ok(format!(
-                "宿主已接受 {member} 请求；页面加载结果请在目标窗口查看。"
+            return Ok(crate::localized_format!("宿主已接受 {member} 请求；页面加载结果请在目标窗口查看。", "The host accepted the {member} request; check the target window for the page-loading result."
             ));
         }
     }
@@ -1027,14 +1236,15 @@ pub fn action_in_process(
         LegacyAction::Forward => { method(&object(&window, "history")?, "forward", vec![])?; }
         LegacyAction::Stop => {
             let accepted = method(&selected, "execCommand", vec![VARIANT::from("Stop"), VARIANT::from(false), VARIANT::new()])?;
-            if !true_result(&accepted) { return Err("文档拒绝了 Stop 命令；加载可能仍在继续。".into()); }
+            if !true_result(&accepted) { return Err(crate::locale::label("文档拒绝了 Stop 命令；加载可能仍在继续。", "The document rejected the Stop command; loading may still be in progress.").into()); }
         }
         LegacyAction::Refresh => { method(&object(&window, "location")?, "reload", vec![VARIANT::from(false)])?; }
-        LegacyAction::Home => return Err("宿主未提供 WebBrowser.GoHome；框架没有独立主页。为避免跳转到猜测的地址，此操作不可用。".into()),
+        LegacyAction::Home => return Err(crate::locale::label("宿主未提供 WebBrowser.GoHome；框架没有独立主页。为避免跳转到猜测的地址，此操作不可用。", "The host does not provide WebBrowser.GoHome, and frames have no independent home page. This action is unavailable to avoid navigating to a guessed address.").into()),
         LegacyAction::Highlight => unreachable!(),
     }
-    Ok(format!(
+    Ok(crate::localized_format!(
         "文档已接受 {} 请求；请在目标窗口查看结果。",
+        "The document accepted the {} request; check the target window for the result.",
         requested.as_str()
     ))
 }
@@ -1190,7 +1400,12 @@ pub fn highlight(
         background,
         bold,
     };
-    let input = serde_json::to_vec(&request).map_err(|e| format!("无法序列化高亮请求：{e}"))?;
+    let input = serde_json::to_vec(&request).map_err(|e| {
+        crate::localized_format!(
+            "无法序列化高亮请求：{e}",
+            "Could not serialize the highlight request: {e}"
+        )
+    })?;
     let args = [
         hwnd.to_string(),
         frame.map(|n| n.to_string()).unwrap_or_else(|| "top".into()),
@@ -1202,16 +1417,33 @@ pub fn highlight(
         WORKER_TIMEOUT,
     )?;
     if identity(hwnd)? != before {
-        return Err("高亮期间窗口已改变；请先检查目标窗口。".into());
+        return Err(crate::locale::label(
+            "高亮期间窗口已改变；请先检查目标窗口。",
+            "The window changed during highlighting; check the target window first.",
+        )
+        .into());
     }
-    serde_json::from_slice(&bytes).map_err(|e| format!("高亮结果格式无效：{e}"))?
+    serde_json::from_slice(&bytes).map_err(|e| {
+        crate::localized_format!(
+            "高亮结果格式无效：{e}",
+            "Invalid highlight result format: {e}"
+        )
+    })?
 }
 fn validate_needle(needle: &str) -> Result<(), String> {
     if needle.trim().is_empty() {
-        return Err("请先输入要高亮的文字".into());
+        return Err(crate::locale::label(
+            "请先输入要高亮的文字",
+            "Enter the text to highlight first",
+        )
+        .into());
     }
     if needle.len() > 1024 || needle.contains('\0') {
-        return Err("高亮文字最多 1024 字节，且不能包含空字符".into());
+        return Err(crate::locale::label(
+            "高亮文字最多 1024 字节，且不能包含空字符",
+            "Highlight text must be at most 1024 bytes and contain no null characters",
+        )
+        .into());
     }
     Ok(())
 }
@@ -1225,8 +1457,7 @@ fn range_command(range: &IDispatch, name: &str, value: VARIANT) -> Result<(), St
         "execCommand",
         vec![VARIANT::from(name), VARIANT::from(false), value],
     )?) {
-        return Err(format!(
-            "宿主拒绝 {name} 格式命令；该页面可能不允许文字格式修改"
+        return Err(crate::localized_format!("宿主拒绝 {name} 格式命令；该页面可能不允许文字格式修改", "The host rejected the {name} formatting command; this page may not permit text formatting changes"
         ));
     }
     Ok(())
@@ -1252,8 +1483,7 @@ pub fn highlight_in_process(
     let mut skipped = 0usize;
     for _ in 0..200 {
         if started.elapsed() >= WALK_TIMEOUT {
-            return Ok(format!(
-                "已高亮 {matches} 处文字；达到 4 秒上限。格式变化保留在当前页面，刷新可重置。"
+            return Ok(crate::localized_format!("已高亮 {matches} 处文字；达到 4 秒上限。格式变化保留在当前页面，刷新可重置。", "Highlighted {matches} matches; the 4-second limit was reached. Formatting changes remain on the current page and can be reset by refreshing."
             ));
         }
         let found = method(
@@ -1267,9 +1497,9 @@ pub fn highlight_in_process(
         )?;
         if !true_result(&found) {
             return Ok(if matches == 0 {
-                format!("未找到可高亮文字；已跳过 {skipped} 个表单或受保护区域。")
+                crate::localized_format!("未找到可高亮文字；已跳过 {skipped} 个表单或受保护区域。", "No text could be highlighted; {skipped} form or protected regions were skipped.")
             } else {
-                format!("已高亮 {matches} 处文字，跳过 {skipped} 个表单区域。仅修改当前页面显示，刷新可重置。")
+                crate::localized_format!("已高亮 {matches} 处文字，跳过 {skipped} 个表单区域。仅修改当前页面显示，刷新可重置。", "Highlighted {matches} matches and skipped {skipped} form regions. Only the current page's display was changed; refresh to reset it.")
             });
         }
         let mut element = dispatch(&method(&range, "parentElement", vec![])?)?;
@@ -1318,14 +1548,18 @@ pub fn highlight_in_process(
                         break;
                     }
                     if attempt == 2 {
-                        return Err("宿主没有应用所请求的粗体状态".into());
+                        return Err(crate::locale::label(
+                            "宿主没有应用所请求的粗体状态",
+                            "The host did not apply the requested bold state",
+                        )
+                        .into());
                     }
                     range_command(&range, "Bold", VARIANT::new())?;
                 }
                 Ok::<_, String>(())
             })();
             if let Err(error) = apply {
-                return Err(format!("{error}。之前已高亮 {matches} 处；当前匹配也可能已有部分颜色变化。刷新页面可重置。"));
+                return Err(crate::localized_format!("{error}。之前已高亮 {matches} 处；当前匹配也可能已有部分颜色变化。刷新页面可重置。", "{error}. {matches} earlier matches were highlighted; the current match may also have partial color changes. Refresh the page to reset them."));
             }
             matches += 1;
         } else {
@@ -1333,8 +1567,7 @@ pub fn highlight_in_process(
         }
         method(&range, "collapse", vec![VARIANT::from(false)])?;
     }
-    Ok(format!(
-        "已高亮 {matches} 处文字；最多检查 200 个匹配。刷新页面可重置格式。"
+    Ok(crate::localized_format!("已高亮 {matches} 处文字；最多检查 200 个匹配。刷新页面可重置格式。", "Highlighted {matches} matches; at most 200 matches are inspected. Refresh the page to reset formatting."
     ))
 }
 
@@ -1375,7 +1608,11 @@ pub fn download_url(url: &str) -> Result<Option<String>, String> {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return Err("已有下载保存对话框打开，请先完成或取消它".into());
+        return Err(crate::locale::label(
+            "已有下载保存对话框打开，请先完成或取消它",
+            "A download save dialog is already open; finish or cancel it first",
+        )
+        .into());
     }
     let dialog_guard = DownloadDialogGuard;
     let mut file = vec![0u16; 32768];
@@ -1383,10 +1620,13 @@ pub fn download_url(url: &str) -> Result<Option<String>, String> {
     for (out, unit) in file.iter_mut().zip(default.encode_utf16()) {
         *out = unit;
     }
-    let title: Vec<u16> = "下载资源 · 仅 HTTP(S)，50 MiB / 30 秒上限，不自动登录或跳转\0"
+    let title: Vec<u16> = crate::locale::label("下载资源 · 仅 HTTP(S)，50 MiB / 30 秒上限，不自动登录或跳转\0", "Download resource · HTTP(S) only, 50 MiB / 30-second limit, no automatic login or redirects\0")
         .encode_utf16()
         .collect();
-    let filter: Vec<u16> = "资源文件 (*.*)\0*.*\0\0".encode_utf16().collect();
+    let filter: Vec<u16> =
+        crate::locale::label("资源文件 (*.*)\0*.*\0\0", "Resource files (*.*)\0*.*\0\0")
+            .encode_utf16()
+            .collect();
     let foreground = unsafe { GetForegroundWindow() };
     let mut owner_pid = 0;
     if !foreground.is_null() {
@@ -1410,57 +1650,81 @@ pub fn download_url(url: &str) -> Result<Option<String>, String> {
         return if error == 0 {
             Ok(None)
         } else {
-            Err(format!("下载保存对话框失败：0x{error:08X}"))
+            Err(crate::localized_format!(
+                "下载保存对话框失败：0x{error:08X}",
+                "Download save dialog failed: 0x{error:08X}"
+            ))
         };
     }
     drop(dialog_guard);
     let length = file
         .iter()
         .position(|value| *value == 0)
-        .ok_or("保存路径无结束符")?;
+        .ok_or(crate::locale::label(
+            "保存路径无结束符",
+            "The save path is missing its terminator",
+        ))?;
     let destination = std::path::PathBuf::from(std::ffi::OsString::from_wide(&file[..length]));
-    let destination_text = destination
-        .to_str()
-        .ok_or("保存路径无法表示为 Unicode，请选择另一个文件名")?;
+    let destination_text = destination.to_str().ok_or(crate::locale::label(
+        "保存路径无法表示为 Unicode，请选择另一个文件名",
+        "The save path cannot be represented as Unicode; choose another filename",
+    ))?;
     let filename = destination
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("无效的保存文件名")?;
+        .ok_or(crate::locale::label(
+            "无效的保存文件名",
+            "Invalid save filename",
+        ))?;
     if filename.contains(':') || unsafe_extension(filename) {
         return Err(
-            "不允许保存为可执行程序、脚本、快捷方式或备用数据流。请选择普通资源文件名。".into(),
+            crate::locale::label("不允许保存为可执行程序、脚本、快捷方式或备用数据流。请选择普通资源文件名。", "Saving as an executable, script, shortcut, or alternate data stream is not allowed. Choose an ordinary resource filename.").into(),
         );
     }
-    let parent = destination.parent().ok_or("保存目录无效")?;
+    let parent = destination.parent().ok_or(crate::locale::label(
+        "保存目录无效",
+        "Invalid save directory",
+    ))?;
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "系统时钟无效")?
+        .map_err(|_| crate::locale::label("系统时钟无效", "Invalid system clock"))?
         .as_nanos();
     let temporary = parent.join(format!(
         ".coralspynext-{}-{unique}.part",
         std::process::id()
     ));
-    let temporary_text = temporary.to_str().ok_or("临时路径无法表示为 Unicode")?;
+    let temporary_text = temporary.to_str().ok_or(crate::locale::label(
+        "临时路径无法表示为 Unicode",
+        "The temporary path cannot be represented as Unicode",
+    ))?;
     let partial_guard = PartialFile(temporary.clone());
     let request = LegacyDownloadRequest {
         url: url.into(),
         path: temporary_text.into(),
     };
-    let input = serde_json::to_vec(&request).map_err(|e| format!("无法准备下载：{e}"))?;
+    let input = serde_json::to_vec(&request).map_err(|e| {
+        crate::localized_format!("无法准备下载：{e}", "Could not prepare the download: {e}")
+    })?;
     let bytes = bounded_worker(
         "--legacy-download-worker",
         &[],
         Some(&input),
         Duration::from_secs(30),
     )?;
-    let result: Result<u64, String> =
-        serde_json::from_slice(&bytes).map_err(|e| format!("下载结果无效：{e}"))?;
+    let result: Result<u64, String> = serde_json::from_slice(&bytes).map_err(|e| {
+        crate::localized_format!("下载结果无效：{e}", "Invalid download result: {e}")
+    })?;
     let size = result?;
     let actual = std::fs::metadata(&temporary)
-        .map_err(|e| format!("无法核对下载文件：{e}"))?
+        .map_err(|e| {
+            crate::localized_format!(
+                "无法核对下载文件：{e}",
+                "Could not verify the downloaded file: {e}"
+            )
+        })?
         .len();
     if size != actual || actual > DOWNLOAD_LIMIT {
-        return Err("下载文件大小核对失败；没有覆盖目标文件".into());
+        return Err(crate::locale::label("下载文件大小核对失败；没有覆盖目标文件", "The downloaded file's size could not be verified; the destination file was not overwritten").into());
     }
     // Mark files as Internet-zone content before publishing, where the filesystem
     // supports NTFS alternate streams. No downloaded content is ever opened.
@@ -1482,8 +1746,9 @@ pub fn download_url(url: &str) -> Result<Option<String>, String> {
         )
     } == 0
     {
-        return Err(format!(
+        return Err(crate::localized_format!(
             "资源已下载，但无法保存到指定位置：{}",
+            "The resource was downloaded but could not be saved to the specified location: {}",
             std::io::Error::last_os_error()
         ));
     }
@@ -1511,7 +1776,11 @@ fn wide_part(pointer: *mut u16, length: u32) -> Vec<u16> {
 fn parse_download_url(url: &str) -> Result<DownloadUrl, String> {
     use windows_sys::Win32::Networking::WinHttp::*;
     if url.len() > 8192 || url.chars().any(|c| c.is_control()) || url.contains('\\') {
-        return Err("下载地址过长或包含无效字符".into());
+        return Err(crate::locale::label(
+            "下载地址过长或包含无效字符",
+            "The download address is too long or contains invalid characters",
+        )
+        .into());
     }
     let url = url.split('#').next().unwrap_or("");
     let wide: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
@@ -1523,19 +1792,27 @@ fn parse_download_url(url: &str) -> Result<DownloadUrl, String> {
     parts.dwUserNameLength = u32::MAX;
     parts.dwPasswordLength = u32::MAX;
     if unsafe { WinHttpCrackUrl(wide.as_ptr(), (wide.len() - 1) as u32, 0, &mut parts) } == 0 {
-        return Err("无法解析下载地址；仅支持完整 HTTP(S) URL".into());
+        return Err(crate::locale::label(
+            "无法解析下载地址；仅支持完整 HTTP(S) URL",
+            "Could not parse the download address; only complete HTTP(S) URLs are supported",
+        )
+        .into());
     }
     if parts.nScheme != WINHTTP_INTERNET_SCHEME_HTTP
         && parts.nScheme != WINHTTP_INTERNET_SCHEME_HTTPS
     {
-        return Err("下载只支持 HTTP 和 HTTPS；不打开 file、javascript、data 或其他协议".into());
+        return Err(crate::locale::label("下载只支持 HTTP 和 HTTPS；不打开 file、javascript、data 或其他协议", "Downloads support only HTTP and HTTPS; file, javascript, data, and other schemes are not opened").into());
     }
     if parts.dwUserNameLength != 0 || parts.dwPasswordLength != 0 {
-        return Err("下载地址不能内含用户名或密码；不会自动登录".into());
+        return Err(crate::locale::label("下载地址不能内含用户名或密码；不会自动登录", "The download address must not contain a username or password; automatic login is not used").into());
     }
     let mut host = wide_part(parts.lpszHostName, parts.dwHostNameLength);
     if host.is_empty() {
-        return Err("下载地址缺少主机名".into());
+        return Err(crate::locale::label(
+            "下载地址缺少主机名",
+            "The download address has no host name",
+        )
+        .into());
     }
     host.push(0);
     let mut path = wide_part(parts.lpszUrlPath, parts.dwUrlPathLength);
@@ -1544,7 +1821,11 @@ fn parse_download_url(url: &str) -> Result<DownloadUrl, String> {
     }
     let path_text = String::from_utf16_lossy(&path);
     if unsafe_extension(&decode_url_ascii(&path_text)) {
-        return Err("不下载可执行程序、脚本或快捷方式地址".into());
+        return Err(crate::locale::label(
+            "不下载可执行程序、脚本或快捷方式地址",
+            "Executable, script, and shortcut addresses are not downloaded",
+        )
+        .into());
     }
     path.extend(wide_part(parts.lpszExtraInfo, parts.dwExtraInfoLength));
     path.push(0);
@@ -1643,7 +1924,11 @@ struct InternetHandle(*mut std::ffi::c_void);
 impl InternetHandle {
     fn new(handle: *mut std::ffi::c_void, stage: &str) -> Result<Self, String> {
         if handle.is_null() {
-            Err(format!("{stage}失败：{}", std::io::Error::last_os_error()))
+            Err(crate::localized_format!(
+                "{stage}失败：{}",
+                "{stage} failed: {}",
+                std::io::Error::last_os_error()
+            ))
         } else {
             Ok(Self(handle))
         }
@@ -1658,8 +1943,9 @@ impl Drop for InternetHandle {
 }
 fn http_ok(ok: i32, stage: &str) -> Result<(), String> {
     if ok == 0 {
-        Err(format!(
+        Err(crate::localized_format!(
             "{stage}失败：{}。不会绕过证书或登录限制。",
+            "{stage} failed: {}. Certificate and login restrictions will not be bypassed.",
             std::io::Error::last_os_error()
         ))
     } else {
@@ -1697,7 +1983,7 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
     use windows_sys::Win32::Networking::WinHttp::*;
     let parsed = parse_download_url(&request.url)?;
     if request.path.is_empty() || request.path.contains('\0') {
-        return Err("临时保存路径无效".into());
+        return Err(crate::locale::label("临时保存路径无效", "Invalid temporary save path").into());
     }
     let agent: Vec<u16> = "CoralSpyNext/1.0 explicit-asset-download\0"
         .encode_utf16()
@@ -1712,15 +1998,15 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                 0,
             )
         },
-        "初始化 HTTP",
+        crate::locale::label("初始化 HTTP", "Initialize HTTP"),
     )?;
     http_ok(
         unsafe { WinHttpSetTimeouts(session.0, 5000, 5000, 5000, 5000) },
-        "设置 HTTP 超时",
+        crate::locale::label("设置 HTTP 超时", "Set HTTP timeouts"),
     )?;
     let connection = InternetHandle::new(
         unsafe { WinHttpConnect(session.0, parsed.host.as_ptr(), parsed.port, 0) },
-        "连接服务器",
+        crate::locale::label("连接服务器", "Connect to server"),
     )?;
     let verb: Vec<u16> = "GET\0".encode_utf16().collect();
     let response = InternetHandle::new(
@@ -1739,7 +2025,7 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                 },
             )
         },
-        "创建 HTTP 请求",
+        crate::locale::label("创建 HTTP 请求", "Create HTTP request"),
     )?;
     let disabled =
         WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_AUTHENTICATION;
@@ -1752,7 +2038,10 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                 4,
             )
         },
-        "禁用自动登录、Cookie 和跳转",
+        crate::locale::label(
+            "禁用自动登录、Cookie 和跳转",
+            "Disable automatic login, cookies, and redirects",
+        ),
     )?;
     let autologon = WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH;
     http_ok(
@@ -1764,34 +2053,43 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                 4,
             )
         },
-        "禁用自动凭据",
+        crate::locale::label("禁用自动凭据", "Disable automatic credentials"),
     )?;
     http_ok(
         unsafe { WinHttpSendRequest(response.0, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) },
-        "发送下载请求",
+        crate::locale::label("发送下载请求", "Send download request"),
     )?;
     http_ok(
         unsafe { WinHttpReceiveResponse(response.0, std::ptr::null_mut()) },
-        "接收服务器响应",
+        crate::locale::label("接收服务器响应", "Receive server response"),
     )?;
     let status = header(&response, WINHTTP_QUERY_STATUS_CODE)
         .and_then(|text| text.parse::<u16>().ok())
-        .ok_or("服务器未返回有效 HTTP 状态码")?;
+        .ok_or(crate::locale::label(
+            "服务器未返回有效 HTTP 状态码",
+            "The server did not return a valid HTTP status code",
+        ))?;
     if (300..400).contains(&status) {
-        return Err(format!("服务器返回 HTTP {status} 跳转；为避免转向未知地址，未自动跟随。请在浏览器确认最终 HTTP(S) 资源地址后重试。"));
+        return Err(crate::localized_format!("服务器返回 HTTP {status} 跳转；为避免转向未知地址，未自动跟随。请在浏览器确认最终 HTTP(S) 资源地址后重试。", "The server returned an HTTP {status} redirect; it was not followed automatically to avoid navigating to an unknown address. Confirm the final HTTP(S) resource address in a browser, then retry."));
     }
     if status == 401 || status == 407 {
-        return Err(format!(
-            "下载需要登录或代理认证（HTTP {status}）；不会读取或发送浏览器凭据。"
+        return Err(crate::localized_format!("下载需要登录或代理认证（HTTP {status}）；不会读取或发送浏览器凭据。", "This download requires login or proxy authentication (HTTP {status}); browser credentials will not be read or sent."
         ));
     }
     if status != 200 {
-        return Err(format!("服务器返回 HTTP {status}；没有保存资源"));
+        return Err(crate::localized_format!(
+            "服务器返回 HTTP {status}；没有保存资源",
+            "The server returned HTTP {status}; no resource was saved"
+        ));
     }
     let expected =
         header(&response, WINHTTP_QUERY_CONTENT_LENGTH).and_then(|text| text.parse::<u64>().ok());
     if expected.is_some_and(|size| size > DOWNLOAD_LIMIT) {
-        return Err("资源超过 50 MiB 下载上限".into());
+        return Err(crate::locale::label(
+            "资源超过 50 MiB 下载上限",
+            "The resource exceeds the 50 MiB download limit",
+        )
+        .into());
     }
     let content_type = header(&response, WINHTTP_QUERY_CONTENT_TYPE)
         .unwrap_or_default()
@@ -1808,20 +2106,33 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
     .iter()
     .any(|kind| content_type.contains(kind))
     {
-        return Err("服务器返回可执行程序或脚本类型，已停止下载".into());
+        return Err(crate::locale::label(
+            "服务器返回可执行程序或脚本类型，已停止下载",
+            "The server returned an executable or script content type; the download was stopped",
+        )
+        .into());
     }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&request.path)
-        .map_err(|e| format!("无法创建下载临时文件：{e}"))?;
+        .map_err(|e| {
+            crate::localized_format!(
+                "无法创建下载临时文件：{e}",
+                "Could not create the temporary download file: {e}"
+            )
+        })?;
     let mut buffer = [0u8; 65536];
     let mut total = 0u64;
     let started = Instant::now();
     let mut prefix = Vec::new();
     loop {
         if started.elapsed() >= Duration::from_secs(25) {
-            return Err("下载达到 25 秒流式读取上限".into());
+            return Err(crate::locale::label(
+                "下载达到 25 秒流式读取上限",
+                "The download reached the 25-second streaming-read limit",
+            )
+            .into());
         }
         let mut read = 0;
         http_ok(
@@ -1833,14 +2144,18 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                     &mut read,
                 )
             },
-            "读取资源",
+            crate::locale::label("读取资源", "Read resource"),
         )?;
         if read == 0 {
             break;
         }
         total += read as u64;
         if total > DOWNLOAD_LIMIT {
-            return Err("资源超过 50 MiB 下载上限".into());
+            return Err(crate::locale::label(
+                "资源超过 50 MiB 下载上限",
+                "The resource exceeds the 50 MiB download limit",
+            )
+            .into());
         }
         if prefix.len() < 4 {
             prefix.extend_from_slice(&buffer[..(read as usize).min(4 - prefix.len())]);
@@ -1848,16 +2163,29 @@ pub fn download_in_process(request: &LegacyDownloadRequest) -> Result<u64, Strin
                 || prefix.starts_with(b"\x7FELF")
                 || prefix.starts_with(b"#!")
             {
-                return Err("资源内容为可执行文件或脚本，已停止保存".into());
+                return Err(crate::locale::label(
+                    "资源内容为可执行文件或脚本，已停止保存",
+                    "The resource content is an executable or script; saving was stopped",
+                )
+                .into());
             }
         }
-        file.write_all(&buffer[..read as usize])
-            .map_err(|e| format!("保存资源失败：{e}"))?;
+        file.write_all(&buffer[..read as usize]).map_err(|e| {
+            crate::localized_format!("保存资源失败：{e}", "Could not save the resource: {e}")
+        })?;
     }
     if expected.is_some_and(|size| size != total) {
-        return Err("响应未完整下载；没有替换目标文件".into());
+        return Err(crate::locale::label(
+            "响应未完整下载；没有替换目标文件",
+            "The response was not fully downloaded; the destination file was not replaced",
+        )
+        .into());
     }
-    file.sync_all()
-        .map_err(|e| format!("保存资源同步失败：{e}"))?;
+    file.sync_all().map_err(|e| {
+        crate::localized_format!(
+            "保存资源同步失败：{e}",
+            "Could not flush the saved resource: {e}"
+        )
+    })?;
     Ok(total)
 }

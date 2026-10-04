@@ -6,7 +6,10 @@
 //! Password status is checked before any content property or pattern is read;
 //! protected or unclassified elements are redacted and their subtrees skipped.
 
-use crate::model::{ContentNode, ContentSnapshot};
+use crate::{
+    locale::label,
+    model::{ContentNode, ContentSnapshot},
+};
 use std::{
     io::Read,
     os::windows::process::CommandExt,
@@ -44,6 +47,17 @@ const MAX_WIRE_BYTES: usize = 16 * 1_048_576;
 const PROTECTED: &str = "[受保护内容：已跳过]";
 const UNVERIFIED: &str = "[无法确认密码保护状态：已跳过]";
 
+// Select only program-owned messages; provider text and error details stay intact.
+macro_rules! localized_format {
+    ($zh:literal, $en:literal) => {
+        if crate::locale::is_english() {
+            format!($en)
+        } else {
+            format!($zh)
+        }
+    };
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct WindowIdentity {
     pid: u32,
@@ -52,17 +66,30 @@ struct WindowIdentity {
 }
 
 fn identity(hwnd: u64) -> Result<WindowIdentity, String> {
-    let address = usize::try_from(hwnd).map_err(|_| "窗口句柄超出指针宽度")?;
+    let address = usize::try_from(hwnd).map_err(|_| {
+        label(
+            "窗口句柄超出指针宽度",
+            "The window handle exceeds the pointer width",
+        )
+    })?;
     let window = address as windows_sys::Win32::Foundation::HWND;
     if address == 0 || unsafe { IsWindow(window) } == 0 {
-        return Err("所选窗口无效或已经关闭".to_owned());
+        return Err(label(
+            "所选窗口无效或已经关闭",
+            "The selected window is invalid or has closed",
+        )
+        .to_owned());
     }
     let mut pid = 0;
     let tid = unsafe { GetWindowThreadProcessId(window, &mut pid) };
     let mut class = [0u16; 256];
     let count = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
     if tid == 0 || pid == 0 || count <= 0 {
-        return Err("无法确认所选窗口的进程与类型；请重新选取".to_owned());
+        return Err(label(
+            "无法确认所选窗口的进程与类型；请重新选取",
+            "Cannot verify the selected window's process and class; select it again",
+        )
+        .to_owned());
     }
     Ok(WindowIdentity {
         pid,
@@ -76,16 +103,27 @@ fn identity(hwnd: u64) -> Result<WindowIdentity, String> {
 /// initialization, and write a single JSON `Result<ContentSnapshot, String>`.
 pub fn inspect(hwnd: u64) -> Result<ContentSnapshot, String> {
     let before = identity(hwnd)?;
-    let executable = std::env::current_exe().map_err(|e| format!("定位检查程序失败：{e}"))?;
+    let executable = std::env::current_exe().map_err(|e| {
+        localized_format!(
+            "定位检查程序失败：{e}",
+            "Failed to locate the inspection executable: {e}"
+        )
+    })?;
     let mut child = Command::new(executable)
         .arg("--accessibility-worker")
         .arg(hwnd.to_string())
+        .env("CORALSPYNEXT_LANG", crate::locale::language_code())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| format!("启动 UI Automation 检查进程失败：{e}"))?;
+        .map_err(|e| {
+            localized_format!(
+                "启动 UI Automation 检查进程失败：{e}",
+                "Failed to start the UI Automation inspection process: {e}"
+            )
+        })?;
     // Kernel containment survives abrupt parent exit while COM is hung. Keep
     // the job alive until every normal/error path has killed and reaped child.
     let _job_guard = match crate::helper_guard::bind_child(&child) {
@@ -99,7 +137,11 @@ pub fn inspect(hwnd: u64) -> Result<ContentSnapshot, String> {
     let Some(mut stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Err("无法读取 UI Automation 检查进程输出".into());
+        return Err(label(
+            "无法读取 UI Automation 检查进程输出",
+            "Cannot read output from the UI Automation inspection process",
+        )
+        .into());
     };
     let overflow = Arc::new(AtomicBool::new(false));
     let reader_overflow = Arc::clone(&overflow);
@@ -113,7 +155,12 @@ pub fn inspect(hwnd: u64) -> Result<ContentSnapshot, String> {
                 .by_ref()
                 .take((MAX_WIRE_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)
-                .map_err(|e| format!("读取检查结果失败：{e}"))?;
+                .map_err(|e| {
+                    localized_format!(
+                        "读取检查结果失败：{e}",
+                        "Failed to read inspection results: {e}"
+                    )
+                })?;
             if bytes.len() > MAX_WIRE_BYTES {
                 reader_overflow.store(true, Ordering::Release);
             }
@@ -123,21 +170,33 @@ pub fn inspect(hwnd: u64) -> Result<ContentSnapshot, String> {
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("创建结果读取线程失败：{e}"));
+            return Err(localized_format!(
+                "创建结果读取线程失败：{e}",
+                "Failed to create the result-reader thread: {e}"
+            ));
         }
     };
     let started = Instant::now();
     let outcome = loop {
         if overflow.load(Ordering::Acquire) {
-            break Err("UI Automation 返回结果超过安全大小限制".to_owned());
+            break Err(label(
+                "UI Automation 返回结果超过安全大小限制",
+                "UI Automation results exceed the safe size limit",
+            )
+            .to_owned());
         }
         if started.elapsed() >= WORKER_BUDGET {
-            break Err("UI Automation 提供程序在 8 秒内未响应；检查进程已停止。目标程序可能挂起或拒绝访问。".to_owned());
+            break Err(label("UI Automation 提供程序在 8 秒内未响应；检查进程已停止。目标程序可能挂起或拒绝访问。", "The UI Automation provider did not respond within 8 seconds; the inspection process was stopped. The target application may be unresponsive or denying access.").to_owned());
         }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(e) => break Err(format!("等待检查进程失败：{e}")),
+            Err(e) => {
+                break Err(localized_format!(
+                    "等待检查进程失败：{e}",
+                    "Failed to wait for the inspection process: {e}"
+                ))
+            }
         }
     };
     if outcome.is_err() {
@@ -146,25 +205,44 @@ pub fn inspect(hwnd: u64) -> Result<ContentSnapshot, String> {
     // Always reap the helper and join the bounded pipe reader, including all
     // timeout/error paths. The helper never starts child processes of its own.
     let _ = child.wait();
-    let bytes = reader
-        .join()
-        .map_err(|_| "检查结果读取线程失败".to_owned())?;
+    let bytes = reader.join().map_err(|_| {
+        label(
+            "检查结果读取线程失败",
+            "The inspection result-reader thread failed",
+        )
+        .to_owned()
+    })?;
     let status = outcome?;
     let bytes = bytes?;
     if overflow.load(Ordering::Acquire) {
-        return Err("检查结果超过安全大小限制".into());
+        return Err(label(
+            "检查结果超过安全大小限制",
+            "Inspection results exceed the safe size limit",
+        )
+        .into());
     }
     if !status.success() {
-        return Err(format!("UI Automation 检查进程异常退出（{status}）"));
+        return Err(localized_format!(
+            "UI Automation 检查进程异常退出（{status}）",
+            "The UI Automation inspection process exited unexpectedly ({status})"
+        ));
     }
     if identity(hwnd)? != before {
-        return Err("检查期间所选窗口已改变；结果已丢弃，请重新选取".into());
+        return Err(label("检查期间所选窗口已改变；结果已丢弃，请重新选取", "The selected window changed during inspection; results were discarded. Select it again").into());
     }
-    let result: Result<ContentSnapshot, String> = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("UI Automation 检查结果格式无效：{e}"))?;
+    let result: Result<ContentSnapshot, String> = serde_json::from_slice(&bytes).map_err(|e| {
+        localized_format!(
+            "UI Automation 检查结果格式无效：{e}",
+            "Invalid UI Automation inspection result format: {e}"
+        )
+    })?;
     let snapshot = result?;
     if snapshot.hwnd != hwnd {
-        return Err("检查结果与所选窗口不匹配".into());
+        return Err(label(
+            "检查结果与所选窗口不匹配",
+            "Inspection results do not match the selected window",
+        )
+        .into());
     }
     Ok(snapshot)
 }
@@ -174,7 +252,12 @@ impl ComApartment {
     fn new() -> Result<Self, String> {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
             .ok()
-            .map_err(|e| format!("初始化 UI Automation MTA 失败：{e}"))?;
+            .map_err(|e| {
+                localized_format!(
+                    "初始化 UI Automation MTA 失败：{e}",
+                    "Failed to initialize the UI Automation MTA: {e}"
+                )
+            })?;
         Ok(Self)
     }
 }
@@ -210,18 +293,27 @@ impl Walk {
     fn time_left(&mut self) -> bool {
         if self.started.elapsed() >= WALK_BUDGET {
             self.stopped = true;
-            self.limit("已达到 3 秒内容采集预算；当前结果不完整。");
+            self.limit(label(
+                "已达到 3 秒内容采集预算；当前结果不完整。",
+                "The 3-second content collection budget was reached; results are incomplete.",
+            ));
         }
         self.started.elapsed() < WALK_BUDGET
     }
     fn continue_walk(&mut self) -> bool {
         if self.snapshot.nodes.len() >= MAX_NODES {
             self.stopped = true;
-            self.limit("已达到 5000 个元素限制；其余内容未读取。");
+            self.limit(label(
+                "已达到 5000 个元素限制；其余内容未读取。",
+                "The 5,000-element limit was reached; remaining content was not read.",
+            ));
         }
         if self.remaining == 0 {
             self.stopped = true;
-            self.limit("已达到 1 MiB 内容限制；其余内容未读取。");
+            self.limit(label(
+                "已达到 1 MiB 内容限制；其余内容未读取。",
+                "The 1 MiB content limit was reached; remaining content was not read.",
+            ));
         }
         let time_left = self.time_left();
         !self.stopped && time_left
@@ -230,7 +322,10 @@ impl Walk {
         let (output, truncated) = bounded_utf16(text.as_wide(), self.remaining);
         self.remaining -= output.len();
         if truncated {
-            self.limit("已达到 1 MiB 内容限制；部分字段已截断。");
+            self.limit(label(
+                "已达到 1 MiB 内容限制；部分字段已截断。",
+                "The 1 MiB content limit was reached; some fields were truncated.",
+            ));
         }
         output
     }
@@ -238,7 +333,7 @@ impl Walk {
         match value {
             Ok(value) => self.text(value),
             Err(_) => {
-                self.limit("部分元素属性无法读取；提供程序可能拒绝访问或元素已消失。");
+                self.limit(label("部分元素属性无法读取；提供程序可能拒绝访问或元素已消失。", "Some element properties could not be read; the provider may be denying access or the element may have disappeared."));
                 String::new()
             }
         }
@@ -276,13 +371,16 @@ impl Walk {
         }
         if protected {
             node.value = if password == Some(true) {
-                PROTECTED
+                label(PROTECTED, "[Protected content: skipped]")
             } else {
-                UNVERIFIED
+                label(
+                    UNVERIFIED,
+                    "[Password protection status could not be verified: skipped]",
+                )
             }
             .to_owned();
             self.had_content |= password == Some(true);
-            self.warn("密码或无法确认保护状态的元素及其整个子树已跳过；不读取名称、值或文本。");
+            self.warn(label("密码或无法确认保护状态的元素及其整个子树已跳过；不读取名称、值或文本。", "Password elements, elements with unverified protection status, and their entire subtrees were skipped; names, values, and text were not read."));
         }
         let index = self.snapshot.nodes.len();
         self.snapshot.nodes.push(node);
@@ -304,7 +402,7 @@ impl Walk {
             }
         };
         if depth >= MAX_DEPTH {
-            self.limit("已达到 32 层深度限制；更深的子元素未读取，祖先的聚合内容已跳过。");
+            self.limit(label("已达到 32 层深度限制；更深的子元素未读取，祖先的聚合内容已跳过。", "The 32-level depth limit was reached; deeper elements were not read, and aggregated ancestor content was skipped."));
             return false;
         }
         let mut safe = true;
@@ -332,21 +430,25 @@ impl Walk {
             if !self.safe_subtree[index] {
                 if !self.snapshot.nodes[index].is_password {
                     self.warn(
-                        "子树含受保护、未验证或无法访问的元素；对应祖先的聚合名称/值/文本已跳过。",
+                        label("子树含受保护、未验证或无法访问的元素；对应祖先的聚合名称/值/文本已跳过。", "The subtree contains protected, unverified, or inaccessible elements; aggregated ancestor names, values, and text were skipped."),
                     );
                 }
                 continue;
             }
             if !self.time_left() || self.remaining == 0 {
-                self.limit("内容读取达到时间或大小限制；只返回已安全读取的部分。");
+                self.limit(label("内容读取达到时间或大小限制；只返回已安全读取的部分。", "Content reading reached the time or size limit; only safely read content is returned."));
                 break;
             }
             let element = self.elements[index].clone();
             if password_status(&element) != Some(false) {
                 invalidate_ancestors(&mut self.safe_subtree, &self.parents, index);
                 self.snapshot.nodes[index].is_password = true;
-                self.snapshot.nodes[index].value = UNVERIFIED.to_owned();
-                self.warn("采集期间保护状态发生变化或不可验证；该元素和祖先聚合内容已跳过。");
+                self.snapshot.nodes[index].value = label(
+                    UNVERIFIED,
+                    "[Password protection status could not be verified: skipped]",
+                )
+                .to_owned();
+                self.warn(label("采集期间保护状态发生变化或不可验证；该元素和祖先聚合内容已跳过。", "Protection status changed or could not be verified during collection; the element and aggregated ancestor content were skipped."));
                 continue;
             }
             let mut node = self.snapshot.nodes[index].clone();
@@ -368,19 +470,19 @@ impl Walk {
                             Ok(text) => {
                                 if text.len() >= maximum as usize {
                                     self.limit(
-                                        "TextPattern 文本可能超过长度限制；仅返回有界片段。",
+                                        label("TextPattern 文本可能超过长度限制；仅返回有界片段。", "TextPattern content may exceed the length limit; only a bounded excerpt is returned."),
                                     );
                                 }
                                 node.value = self.text(text);
                                 self.had_content = true; // A supported empty editor is a real result.
                             }
                             Err(_) => self.warn(
-                                "TextPattern 已提供，但无法读取文档内容；提供程序可能拒绝访问。",
+                                label("TextPattern 已提供，但无法读取文档内容；提供程序可能拒绝访问。", "TextPattern is available, but document content could not be read; the provider may be denying access."),
                             ),
                         }
                         }
                         Ok(_) => {}
-                        Err(_) => self.warn("TextPattern 无法返回文档范围；内容可能已不可用。"),
+                        Err(_) => self.warn(label("TextPattern 无法返回文档范围；内容可能已不可用。", "TextPattern could not return the document range; the content may no longer be available.")),
                     }
                 }
             }
@@ -394,7 +496,7 @@ impl Walk {
                             self.had_content = true;
                         }
                         Err(_) => self
-                            .warn("ValuePattern 已提供，但值不可读取；内容可能受限或元素已消失。"),
+                            .warn(label("ValuePattern 已提供，但值不可读取；内容可能受限或元素已消失。", "ValuePattern is available, but its value could not be read; the content may be restricted or the element may have disappeared.")),
                     }
                 }
             }
@@ -428,7 +530,7 @@ impl Walk {
                         }
                         .is_ok()))
             {
-                self.warn("提供程序使用虚拟化项目；仅采集当前暴露的元素，不自动滚动、展开或 Realize 项目。");
+                self.warn(label("提供程序使用虚拟化项目；仅采集当前暴露的元素，不自动滚动、展开或 Realize 项目。", "The provider uses virtualized items; only currently exposed elements are collected. Items are not automatically scrolled, expanded, or realized."));
             }
             if self.time_left() {
                 if let Ok(pattern) = unsafe {
@@ -438,7 +540,7 @@ impl Walk {
                 } {
                     if matches!(unsafe { pattern.CurrentExpandCollapseState() }, Ok(state) if state == ExpandCollapseState_Collapsed || state == ExpandCollapseState_PartiallyExpanded)
                     {
-                        self.warn("检测到折叠内容；仅采集提供程序目前暴露的子项，不改变目标界面。");
+                        self.warn(label("检测到折叠内容；仅采集提供程序目前暴露的子项，不改变目标界面。", "Collapsed content was detected; only children currently exposed by the provider are collected, without changing the target interface."));
                     }
                 }
             }
@@ -448,7 +550,7 @@ impl Walk {
     }
     fn navigation_error(&mut self) {
         self.limit(
-            "部分子元素无法访问；提供程序可能超时、拒绝访问或正在改变。祖先聚合内容已跳过。",
+            label("部分子元素无法访问；提供程序可能超时、拒绝访问或正在改变。祖先聚合内容已跳过。", "Some child elements could not be accessed; the provider may have timed out, denied access, or changed. Aggregated ancestor content was skipped."),
         );
     }
 }
@@ -456,17 +558,27 @@ impl Walk {
 /// Run only in the disposable helper (or a dedicated MTA test worker). Calling
 /// this directly on a GUI thread would defeat the outer hard timeout.
 pub fn inspect_in_process(hwnd: u64) -> Result<ContentSnapshot, String> {
+    crate::locale::init_helper_language();
     let before = identity(hwnd)?;
     let started = Instant::now();
     let _apartment = ComApartment::new()?;
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
             .or_else(|_| unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) })
-            .map_err(|e| format!("UI Automation 不可用：{e}"))?;
+            .map_err(|e| {
+                localized_format!(
+                    "UI Automation 不可用：{e}",
+                    "UI Automation is unavailable: {e}"
+                )
+            })?;
     let mut state = Walk {
         snapshot: ContentSnapshot {
             hwnd,
-            source: "Windows UI Automation · 只读、用户主动检查".into(),
+            source: label(
+                "Windows UI Automation · 只读、用户主动检查",
+                "Windows UI Automation · Read-only, user-initiated inspection",
+            )
+            .into(),
             ..Default::default()
         },
         started,
@@ -481,38 +593,51 @@ pub fn inspect_in_process(hwnd: u64) -> Result<ContentSnapshot, String> {
         let connection = unsafe { settings.SetConnectionTimeout(300) };
         let transaction = unsafe { settings.SetTransactionTimeout(300) };
         if connection.is_err() || transaction.is_err() {
-            state.warn("提供程序超时设置不可用；仍由独立检查进程的 8 秒硬超时保护。");
+            state.warn(label("提供程序超时设置不可用；仍由独立检查进程的 8 秒硬超时保护。", "Provider timeout settings are unavailable; the separate inspection process still enforces an 8-second hard timeout."));
         }
         // This inspector never changes focus; turn off UIA's automatic focus.
         let _ = unsafe { settings.SetAutoSetFocus(false) };
     } else {
-        state.warn("IUIAutomation2 不可用；仍由独立检查进程的 8 秒硬超时保护。");
+        state.warn(label("IUIAutomation2 不可用；仍由独立检查进程的 8 秒硬超时保护。", "IUIAutomation2 is unavailable; the separate inspection process still enforces an 8-second hard timeout."));
     }
-    let root = unsafe { automation.ElementFromHandle(HWND(hwnd as usize as *mut _)) }
-        .map_err(|e| format!("所选窗口没有可访问的 UI Automation 提供程序：{e}"))?;
-    let provider_pid = unsafe { root.CurrentProcessId() }
-        .map_err(|e| format!("无法验证 UI Automation 元素所属进程：{e}"))?;
+    let root =
+        unsafe { automation.ElementFromHandle(HWND(hwnd as usize as *mut _)) }.map_err(|e| {
+            localized_format!(
+                "所选窗口没有可访问的 UI Automation 提供程序：{e}",
+                "The selected window has no accessible UI Automation provider: {e}"
+            )
+        })?;
+    let provider_pid = unsafe { root.CurrentProcessId() }.map_err(|e| {
+        localized_format!(
+            "无法验证 UI Automation 元素所属进程：{e}",
+            "Cannot verify the process owning the UI Automation element: {e}"
+        )
+    })?;
     if provider_pid as u32 != before.pid {
-        return Err("UI Automation 根元素与所选窗口进程不匹配；结果已丢弃".into());
+        return Err(label("UI Automation 根元素与所选窗口进程不匹配；结果已丢弃", "The UI Automation root element does not match the selected window's process; results were discarded").into());
     }
     // Raw view preserves classic item/subitem structure instead of filtering
     // intermediary nodes. Traversal remains confined to this selected root.
-    let walker = unsafe { automation.RawViewWalker() }
-        .map_err(|e| format!("无法读取 UI Automation 树：{e}"))?;
+    let walker = unsafe { automation.RawViewWalker() }.map_err(|e| {
+        localized_format!(
+            "无法读取 UI Automation 树：{e}",
+            "Cannot read the UI Automation tree: {e}"
+        )
+    })?;
     state.scan(&root, &walker, 0, None);
     state.read_verified_content();
     if identity(hwnd)? != before {
-        return Err("采集期间所选窗口已关闭或改变；结果已丢弃，请重新选取".into());
+        return Err(label("采集期间所选窗口已关闭或改变；结果已丢弃，请重新选取", "The selected window closed or changed during collection; results were discarded. Select it again").into());
     }
     if state.snapshot.nodes.is_empty() || !state.had_content {
-        return Err("提供程序没有返回可读内容。目标可能不支持 UI Automation、内容受限，或当前为空且没有文本模式；这不是成功的空结果。".into());
+        return Err(label("提供程序没有返回可读内容。目标可能不支持 UI Automation、内容受限，或当前为空且没有文本模式；这不是成功的空结果。", "The provider returned no readable content. The target may not support UI Automation, its content may be restricted, or it may be empty with no text pattern; this is not a successful empty result.").into());
     }
     state
-        .warn("结果取决于目标程序的可访问性提供程序；未暴露、虚拟化或更高权限的内容可能不可读取。");
+        .warn(label("结果取决于目标程序的可访问性提供程序；未暴露、虚拟化或更高权限的内容可能不可读取。", "Results depend on the target application's accessibility provider; unexposed, virtualized, or higher-privilege content may not be readable."));
     let (text, truncated) = render_nodes(&state.snapshot.nodes, MAX_TEXT_BYTES);
     state.snapshot.text = text;
     if truncated {
-        state.limit("纯文本导出达到 1 MiB 限制；结构化节点可能包含额外字段。");
+        state.limit(label("纯文本导出达到 1 MiB 限制；结构化节点可能包含额外字段。", "Plain-text export reached the 1 MiB limit; structured nodes may contain additional fields."));
     }
     Ok(state.snapshot)
 }

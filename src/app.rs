@@ -5,6 +5,7 @@ use coralspynext::{
     desktop::{DesktopEvent, DesktopService, HotkeyBinding},
     extras,
     legacy::{self, LegacyAction, LegacySnapshot},
+    locale,
     model::{
         hwnd_text, ColorSample, ContentSnapshot, IconImage, IconSnapshot, MenuSnapshot, WindowInfo,
     },
@@ -153,7 +154,7 @@ impl Worker {
                                 if expected.as_ref().is_some_and(|(pid, class)| {
                                     *pid != info.pid || *class != info.class_name
                                 }) {
-                                    Err("目标已关闭或句柄被复用，请重新选取。".into())
+                                    Err(locale::label("目标已关闭或句柄被复用，请重新选取。", "The target closed or its handle was reused. Select it again.").into())
                                 } else {
                                     Ok(info)
                                 }
@@ -183,7 +184,7 @@ impl Worker {
                         } => {
                             let result = (|| {
                                 if platform::window_identity(hwnd)? != expected {
-                                    return Err("目标已关闭或句柄被复用，请重新选取。".into());
+                                    return Err(locale::label("目标已关闭或句柄被复用，请重新选取。", "The target closed or its handle was reused. Select it again.").into());
                                 }
                                 let data = match kind {
                                     DetailKind::Content => DetailPayload::Content {
@@ -214,7 +215,7 @@ impl Worker {
                                     ),
                                 };
                                 if platform::window_identity(hwnd)? != expected {
-                                    return Err("读取期间窗口身份发生变化，已丢弃结果。".into());
+                                    return Err(locale::label("读取期间窗口身份发生变化，已丢弃结果。", "The window identity changed during inspection; the result was discarded.").into());
                                 }
                                 Ok(Box::new(data))
                             })();
@@ -227,7 +228,7 @@ impl Worker {
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }
             })
-            .expect("Cannot start inspection worker");
+            .unwrap_or_else(|_| panic!("{}", locale::label("无法启动检查线程", "Cannot start inspection worker")));
         Self { sender, receiver }
     }
 }
@@ -290,6 +291,7 @@ impl CoralSpyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
         let (settings, warning) = config::load();
+        locale::set_language(&settings.language);
         apply_theme(&cc.egui_ctx, settings.dark);
         let (desktop, desktop_warning) = match DesktopService::new() {
             Ok(service) => (Some(service), None),
@@ -315,7 +317,11 @@ impl CoralSpyApp {
             picker: None,
             color: None,
             color_history: Vec::new(),
-            status: "拖动右侧准星，然后瞄准目标窗口或控件。".into(),
+            status: locale::label(
+                "拖动右侧准星，然后瞄准目标窗口或控件。",
+                "Drag the crosshair on the right to a target window or control.",
+            )
+            .into(),
             status_error: false,
             details_open: false,
             color_open: false,
@@ -351,12 +357,21 @@ impl CoralSpyApp {
             legacy_more: false,
         };
         let registration = app.desktop.as_ref().map(|service| {
-            let handle = cc
-                .window_handle()
-                .map_err(|e| format!("Cannot access main window: {e}"))?;
+            let handle = cc.window_handle().map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    locale::label("无法访问主窗口", "Cannot access main window")
+                )
+            })?;
             let hwnd = match handle.as_raw() {
                 RawWindowHandle::Win32(window) => window.hwnd.get() as usize as u64,
-                _ => return Err("Unsupported native window handle".into()),
+                _ => {
+                    return Err(locale::label(
+                        "不支持此原生窗口句柄",
+                        "Unsupported native window handle",
+                    )
+                    .into())
+                }
             };
             let context = cc.egui_ctx.clone();
             service.set_gui_window(
@@ -431,7 +446,7 @@ impl CoralSpyApp {
                 }
             }
         } else {
-            full_report(info)
+            full_report(info, self.english)
         };
         let id = self.id();
         self.exporting = true;
@@ -446,7 +461,13 @@ impl CoralSpyApp {
         self.pending_inspect = None;
         self.pending_export = None;
         self.pending_detail = None;
-        self.notify("后台检查线程已停止，请重新打开程序。", true);
+        self.notify(
+            locale::label(
+                "后台检查线程已停止，请重新打开程序。",
+                "The inspection worker stopped. Please reopen the program.",
+            ),
+            true,
+        );
     }
     fn service_worker(&mut self, ctx: &egui::Context) {
         loop {
@@ -545,9 +566,12 @@ impl CoralSpyApp {
                                                         ));
                                                     }
                                                 }
-                                                Err(error) => self
-                                                    .content_warning
-                                                    .push_str(&format!("\n图标: {error}")),
+                                                Err(error) => {
+                                                    self.content_warning.push_str(&format!(
+                                                        "\n{}: {error}",
+                                                        locale::label("图标", "Icons")
+                                                    ))
+                                                }
                                             }
                                         }
                                         DetailPayload::Menu(snapshot) => {
@@ -704,9 +728,13 @@ impl CoralSpyApp {
                     }
                 }
                 None => self.notify(
-                    picker
-                        .error
-                        .unwrap_or_else(|| "此位置没有可读取窗口。".into()),
+                    picker.error.unwrap_or_else(|| {
+                        locale::label(
+                            "此位置没有可读取窗口。",
+                            "There is no readable window at this position.",
+                        )
+                        .into()
+                    }),
                     true,
                 ),
             },
@@ -724,9 +752,13 @@ impl CoralSpyApp {
                     );
                 }
                 None => self.notify(
-                    picker
-                        .error
-                        .unwrap_or_else(|| "此位置无法采集颜色。".into()),
+                    picker.error.unwrap_or_else(|| {
+                        locale::label(
+                            "此位置无法采集颜色。",
+                            "The screen color at this position could not be sampled.",
+                        )
+                        .into()
+                    }),
                     true,
                 ),
             },
@@ -777,7 +809,9 @@ impl CoralSpyApp {
         let result = self
             .desktop
             .as_ref()
-            .ok_or_else(|| "Desktop service unavailable".to_string())
+            .ok_or_else(|| {
+                locale::label("桌面服务不可用", "Desktop service unavailable").to_string()
+            })
             .and_then(|service| service.set_hotkeys(enable, bindings));
         self.hotkeys_tested = true;
         match result {
@@ -824,14 +858,21 @@ impl CoralSpyApp {
             self.notify(error, true);
             return false;
         }
+        let language_changed = self.settings.language != self.settings_draft.language;
         self.hotkeys_tested = false;
         self.settings = self.settings_draft.clone();
+        locale::set_language(&self.settings.language);
         self.configure_desktop();
         self.settings_draft = self.settings.clone();
         self.english = self.settings.language == "en-US";
         self.dark = self.settings.dark;
         self.topmost = self.settings.always_on_top;
         apply_theme(ctx, self.dark);
+        if language_changed {
+            let selected_row = self.selected_row;
+            self.rebuild_rows();
+            self.selected_row = selected_row.filter(|index| *index < self.content_rows.len());
+        }
         ctx.send_viewport_cmd_to(
             egui::ViewportId::ROOT,
             egui::ViewportCommand::WindowLevel(if self.topmost {
@@ -1006,11 +1047,11 @@ impl CoralSpyApp {
                             if entry.enabled {
                                 ""
                             } else {
-                                "禁用 Disabled "
+                                locale::label("禁用 ", "Disabled ")
                             },
                             if entry.checked { "✓ " } else { "" },
                             if entry.submenu {
-                                "子菜单 Submenu"
+                                locale::label("子菜单", "Submenu")
                             } else {
                                 ""
                             }
@@ -1038,7 +1079,10 @@ impl CoralSpyApp {
                 .join("\n");
             if let Some(snapshot) = &self.menu_snapshot {
                 for warning in &snapshot.warnings {
-                    report.push_str(&format!("\nWARNING: {warning}"));
+                    report.push_str(&format!(
+                        "\n{}: {warning}",
+                        locale::label("警告", "WARNING")
+                    ));
                 }
             }
             report
@@ -1054,42 +1098,111 @@ impl CoralSpyApp {
     }
     fn icon_contents(&mut self, ui: &mut egui::Ui) {
         ui.label(self.tr("图标", "Icons"));
-        if self.icons.is_empty() {
-            ui.label(self.tr(
-                "目标未提供可读取的图标。",
-                "No readable icons were provided by the target.",
-            ));
-            return;
-        }
+        let slots = classic_icon_slots(&self.icons);
+        let sources = [
+            self.tr("窗口大图标", "Window large icon"),
+            self.tr("窗口小图标", "Window small icon"),
+            self.tr("窗口类大图标", "Class large icon"),
+            self.tr("窗口类小图标", "Class small icon"),
+        ];
+        let sizes = [32.0, 16.0, 32.0, 16.0];
         let mut save = None;
-        ui.horizontal_wrapped(|ui| {
-            for (i, (icon, texture)) in self.icons.iter().zip(&self.icon_textures).enumerate() {
-                ui.vertical(|ui| {
-                    if ui
-                        .add(
-                            egui::Image::new(texture)
-                                .fit_to_exact_size(Vec2::splat(36.0))
-                                .sense(Sense::click()),
+        // Match the original four fixed 36×36 panels, including the slightly
+        // wider gap between the window and class pairs. No missing source is
+        // replaced with a fabricated or unrelated executable icon.
+        let (area, _) = ui.allocate_exact_size(Vec2::new(164.0, 36.0), Sense::hover());
+        for (slot, offset) in [0.0, 40.0, 88.0, 128.0].into_iter().enumerate() {
+            let panel =
+                egui::Rect::from_min_size(area.min + Vec2::new(offset, 0.0), Vec2::splat(36.0));
+            ui.painter()
+                .rect_filled(panel, 0.0, ui.visuals().panel_fill);
+            ui.painter().rect_stroke(
+                panel,
+                0.0,
+                Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+                egui::StrokeKind::Inside,
+            );
+            if let Some(index) = slots[slot].filter(|index| *index < self.icon_textures.len()) {
+                let texture = &self.icon_textures[index];
+                let picture =
+                    egui::Rect::from_center_size(panel.center(), Vec2::splat(sizes[slot]));
+                ui.painter().image(
+                    texture.id(),
+                    picture,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                let response = ui
+                    .interact(panel, ui.id().with(("classic_icon", slot)), Sense::click())
+                    .on_hover_text(format!(
+                        "{} ({}×{})\n{}\n{}",
+                        sources[slot],
+                        sizes[slot] as u32,
+                        sizes[slot] as u32,
+                        locale::icon_source_label(&self.icons[index].kind),
+                        self.tr(
+                            "单击保存实际图标为 ICO",
+                            "Click to save the actual icon as ICO"
                         )
-                        .on_hover_text(self.tr("保存图标", "Save icon"))
-                        .clicked()
-                        && !self.exporting
-                    {
-                        save = Some(i);
-                    }
-                    ui.small(&icon.kind);
-                    if ui
-                        .add_enabled(
-                            !self.exporting,
-                            egui::Button::new(self.tr("保存 ICO", "Save ICO")).small(),
+                    ));
+                if response.clicked() && !self.exporting {
+                    save = Some(index);
+                }
+            } else {
+                ui.painter().text(
+                    panel.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "—",
+                    FontId::proportional(12.0),
+                    ui.visuals().weak_text_color(),
+                );
+                ui.interact(panel, ui.id().with(("empty_icon", slot)), Sense::hover())
+                    .on_hover_text(format!(
+                        "{} ({}×{})\n{}",
+                        sources[slot],
+                        sizes[slot] as u32,
+                        sizes[slot] as u32,
+                        self.tr(
+                            "此来源未提供可读取图标",
+                            "No readable icon from this source"
                         )
-                        .clicked()
-                    {
-                        save = Some(i);
+                    ));
+            }
+        }
+        ui.small(self.tr(
+            "顺序：窗口大/小；窗口类大/小。空槽表示该来源不可用。",
+            "Order: window large/small; class large/small. Empty slots mean unavailable sources.",
+        ));
+        let extra: Vec<usize> = (0..self.icons.len())
+            .filter(|index| !slots.contains(&Some(*index)))
+            .collect();
+        if !extra.is_empty() {
+            egui::CollapsingHeader::new(self.tr("更多图标", "More icons")).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for index in extra {
+                        let icon = &self.icons[index];
+                        let Some(texture) = self.icon_textures.get(index) else {
+                            continue;
+                        };
+                        ui.vertical(|ui| {
+                            if ui
+                                .add(
+                                    egui::Image::new(texture)
+                                        .fit_to_exact_size(Vec2::splat(36.0))
+                                        .sense(Sense::click()),
+                                )
+                                .on_hover_text(self.tr("单击保存 ICO", "Click to save ICO"))
+                                .clicked()
+                                && !self.exporting
+                            {
+                                save = Some(index);
+                            }
+                            ui.small(locale::icon_source_label(&icon.kind));
+                        });
                     }
                 });
-            }
-        });
+            });
+        }
         if let Some(index) = save {
             self.cancel_pick();
             let id = self.id();
@@ -1522,7 +1635,7 @@ impl CoralSpyApp {
                     egui::CollapsingHeader::new(self.tr("窗口属性", "Window properties")).show(
                         ui,
                         |ui| {
-                            let report = full_report(&info);
+                            let report = full_report(&info, self.english);
                             let mut report_view = report.as_str();
                             ui.add(
                                 egui::TextEdit::multiline(&mut report_view)
@@ -1531,7 +1644,7 @@ impl CoralSpyApp {
                             );
                             ui.horizontal(|ui| {
                                 if ui.button(self.tr("复制报告", "Copy report")).clicked() {
-                                    ui.ctx().copy_text(full_report(&info));
+                                    ui.ctx().copy_text(full_report(&info, self.english));
                                 }
                                 if ui.button("JSON").clicked() {
                                     self.export(&info, true);
@@ -1952,12 +2065,12 @@ impl CoralSpyApp {
                                 for form in &s.forms {
                                     ui.label(&form.kind);
                                     ui.label(if form.protected {
-                                        "[受保护 / Protected]"
+                                        locale::label("[受保护]", "[Protected]")
                                     } else {
                                         &form.name
                                     });
                                     let value = if form.protected {
-                                        "[密码受保护 / Password protected]"
+                                        locale::label("[密码受保护]", "[Password protected]")
                                     } else {
                                         &form.value
                                     };
@@ -1982,6 +2095,11 @@ impl CoralSpyApp {
             ui.label(format!(
                 "v{} · Rust · Windows 11 x64",
                 env!("CARGO_PKG_VERSION")
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tr("最后编译", "Built"),
+                env!("BUILD_UTC")
             ));
             ui.add_space(8.0);
             ui.label(self.tr(
@@ -2027,9 +2145,9 @@ impl CoralSpyApp {
             color_field(ui, "DEC", &colorref.to_string(), 92.0);
             color_field(ui, "HEX", &format!("0x{colorref:06X}"), 95.0);
             color_field(ui, "HTML", &format!("#{r:02X}{g:02X}{b:02X}"), 92.0);
-            color_field(ui, "Red", &r.to_string(), 39.0);
-            color_field(ui, "Green", &g.to_string(), 39.0);
-            color_field(ui, "Blue", &b.to_string(), 39.0);
+            color_field(ui, self.tr("红", "Red"), &r.to_string(), 39.0);
+            color_field(ui, self.tr("绿", "Green"), &g.to_string(), 39.0);
+            color_field(ui, self.tr("蓝", "Blue"), &b.to_string(), 39.0);
             ui.add_space((ui.available_width() - 48.0).max(0.0));
             self.crosshair(ui, PickKind::Color);
         });
@@ -2074,7 +2192,7 @@ impl CoralSpyApp {
                     });
                 ui.checkbox(
                     &mut self.settings_draft.hotkeys_enabled,
-                    "启用热键 / Enable hotkeys",
+                    locale::label("启用热键", "Enable hotkeys"),
                 );
             });
             self.settings_draft.hotkeys[self.hotkey_edit] = binding;
@@ -2097,14 +2215,20 @@ impl CoralSpyApp {
                 ui.selectable_value(&mut self.settings_draft.language, "en-US".into(), "English");
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.settings_draft.dark, "Dark / 深色");
-                ui.checkbox(&mut self.settings_draft.always_on_top, "置顶 / On top");
+                ui.checkbox(&mut self.settings_draft.dark, locale::label("深色", "Dark"));
+                ui.checkbox(
+                    &mut self.settings_draft.always_on_top,
+                    locale::label("置顶", "On top"),
+                );
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.settings_draft.tray_enabled, "托盘 / Tray");
+                ui.checkbox(
+                    &mut self.settings_draft.tray_enabled,
+                    locale::label("托盘", "Tray"),
+                );
                 ui.checkbox(
                     &mut self.settings_draft.minimize_to_tray,
-                    "最小化到托盘 / Minimize to tray",
+                    locale::label("最小化到托盘", "Minimize to tray"),
                 );
             });
         });
@@ -2117,7 +2241,10 @@ impl CoralSpyApp {
                 ui.color_edit_button_srgb(&mut self.settings_draft.highlight_text);
                 ui.label(self.tr("背景:", "Background:"));
                 ui.color_edit_button_srgb(&mut self.settings_draft.highlight_background);
-                ui.checkbox(&mut self.settings_draft.highlight_bold, "粗体 / Bold");
+                ui.checkbox(
+                    &mut self.settings_draft.highlight_bold,
+                    locale::label("粗体", "Bold"),
+                );
             });
             let mut text = RichText::new(self.tr("这就是预览效果。", "This is a preview."))
                 .color(Color32::from_rgb(
@@ -2266,7 +2393,10 @@ fn readonly_row(ui: &mut egui::Ui, label: &str, value: &str, multiline: bool, wi
 fn color_field(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
     let mut view = value;
     let response = ui.add(egui::TextEdit::singleline(&mut view).desired_width(width));
-    response.on_hover_text(format!("{label}: {value}\nCtrl+C 复制 / copy"));
+    response.on_hover_text(format!(
+        "{label}: {value}\n{}",
+        locale::label("Ctrl+C 复制", "Ctrl+C to copy")
+    ));
 }
 fn tool(ui: &mut egui::Ui, index: usize, tooltip: &str, active: bool) -> bool {
     let response = ui.add_sized([25.0, 25.0], egui::Button::new("").selected(active));
@@ -2493,7 +2623,7 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
             .insert(egui::TextStyle::Small, FontId::proportional(11.0));
     });
 }
-fn style_names(style: u32, ex_style: u32) -> String {
+fn style_names(style: u32, ex_style: u32, english: bool) -> String {
     let mut names = Vec::new();
     for (bit, name) in [
         (0x8000_0000, "WS_POPUP"),
@@ -2519,19 +2649,33 @@ fn style_names(style: u32, ex_style: u32) -> String {
         }
     }
     if names.is_empty() {
-        "未匹配常见样式标志；完整值见上方。".into()
+        if english {
+            "No common flags matched; see the raw values above.".into()
+        } else {
+            "未匹配常见样式标志；完整值见上方。".into()
+        }
     } else {
         names.join("  ·  ")
     }
 }
-fn full_report(info: &WindowInfo) -> String {
-    format!(
+fn full_report(info: &WindowInfo, english: bool) -> String {
+    if english {
+        format!(
+        "CoralSpyNext — Window inspection snapshot\n\nWindow handle: {}\nParent handle: {}\nTitle: {}\nClass: {}\nProcess name: {}\nPID: {}\nTID: {}\n\nWindow bounds: ({}, {}) → ({}, {})\nWindow size: {} × {} px\nClient bounds: ({}, {}) → ({}, {})\nClient size: {} × {} px\nDPI: {}\n\nVisible: {}\nEnabled: {}\nMinimized: {}\nMaximized: {}\nUnicode: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\nCommon flags: {}\n\nRead status: {}\n\nLocal window metadata only. Passwords and input field contents are not read.\n",
+        hwnd_text(info.hwnd), hwnd_text(info.parent), info.title, info.class_name, info.process_name, info.pid, info.tid,
+        info.rect.left, info.rect.top, info.rect.right, info.rect.bottom, info.rect.width(), info.rect.height(),
+        info.client_rect.left, info.client_rect.top, info.client_rect.right, info.client_rect.bottom, info.client_rect.width(), info.client_rect.height(), info.dpi,
+        info.visible, info.enabled, info.minimized, info.maximized, info.is_unicode, info.style, info.ex_style, style_names(info.style, info.ex_style, english), info.text_status,
+    )
+    } else {
+        format!(
         "CoralSpyNext — 窗口检查快照\n\n窗口句柄: {}\n父窗口句柄: {}\n标题: {}\n类名: {}\n进程名称: {}\nPID: {}\nTID: {}\n\n窗口边界: ({}, {}) → ({}, {})\n窗口大小: {} × {} px\n客户区边界: ({}, {}) → ({}, {})\n客户区大小: {} × {} px\nDPI: {}\n\n可见: {}\n启用: {}\n最小化: {}\n最大化: {}\nUnicode: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\n常见标志: {}\n\n读取状态: {}\n\n仅本机窗口元数据，不读取密码或输入框内容。\n",
         hwnd_text(info.hwnd), hwnd_text(info.parent), info.title, info.class_name, info.process_name, info.pid, info.tid,
         info.rect.left, info.rect.top, info.rect.right, info.rect.bottom, info.rect.width(), info.rect.height(),
         info.client_rect.left, info.client_rect.top, info.client_rect.right, info.client_rect.bottom, info.client_rect.width(), info.client_rect.height(), info.dpi,
-        info.visible, info.enabled, info.minimized, info.maximized, info.is_unicode, info.style, info.ex_style, style_names(info.style, info.ex_style), info.text_status,
+        info.visible, info.enabled, info.minimized, info.maximized, info.is_unicode, info.style, info.ex_style, style_names(info.style, info.ex_style, english), info.text_status,
     )
+    }
 }
 
 pub fn app_icon() -> egui::IconData {
@@ -2569,5 +2713,87 @@ fn key_name(key: u32) -> String {
         0x30..=0x39 | 0x41..=0x5a => char::from_u32(key).unwrap_or('?').to_string(),
         0x70..=0x87 => format!("F{}", key - 0x6f),
         _ => format!("0x{key:02X}"),
+    }
+}
+
+fn classic_icon_slots(icons: &[IconImage]) -> [Option<usize>; 4] {
+    let source = |token: &str| {
+        icons
+            .iter()
+            .position(|icon| icon.kind.split(" / ").any(|part| part == token))
+    };
+    [
+        source("窗口大图标"),
+        source("窗口小图标").or_else(|| source("窗口小图标2")),
+        source("窗口类大图标"),
+        source("窗口类小图标"),
+    ]
+}
+
+#[cfg(test)]
+mod classic_icon_tests {
+    use super::*;
+    fn icon(kind: &str) -> IconImage {
+        IconImage {
+            kind: kind.into(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn report_language_never_translates_captured_fields() {
+        let info = WindowInfo {
+            title: "原始标题 Title: 未读取".into(),
+            class_name: "自定义类".into(),
+            process_name: "应用.exe".into(),
+            text_status: "Provider detail: 原样保留".into(),
+            ..Default::default()
+        };
+        let en = full_report(&info, true);
+        let zh = full_report(&info, false);
+        assert!(en.contains("Window handle:"));
+        assert!(!en.contains("窗口句柄:"));
+        assert!(zh.contains("窗口句柄:"));
+        for value in [
+            &info.title,
+            &info.class_name,
+            &info.process_name,
+            &info.text_status,
+        ] {
+            assert!(en.contains(value));
+            assert!(zh.contains(value));
+        }
+    }
+    #[test]
+    fn fixed_slots_use_sources_not_discovery_order() {
+        let icons = vec![
+            icon("窗口类小图标"),
+            icon("窗口小图标2"),
+            icon("程序文件大图标"),
+            icon("窗口大图标"),
+            icon("窗口类大图标"),
+        ];
+        assert_eq!(
+            classic_icon_slots(&icons),
+            [Some(3), Some(1), Some(4), Some(0)]
+        );
+    }
+    #[test]
+    fn merged_sources_can_share_the_real_image() {
+        let icons = vec![
+            icon("窗口小图标2 / 窗口类小图标"),
+            icon("窗口大图标 / 窗口类大图标"),
+        ];
+        assert_eq!(
+            classic_icon_slots(&icons),
+            [Some(1), Some(0), Some(1), Some(0)]
+        );
+    }
+    #[test]
+    fn executable_fallback_does_not_fill_a_missing_source_slot() {
+        assert_eq!(
+            classic_icon_slots(&[icon("程序文件大图标"), icon("程序文件小图标")]),
+            [None; 4]
+        );
+        assert_eq!(classic_icon_slots(&[]), [None; 4]);
     }
 }

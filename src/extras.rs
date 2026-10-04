@@ -14,25 +14,43 @@ pub use native::{inspect_icons, inspect_menus, save_icon};
 
 #[cfg(not(windows))]
 pub fn inspect_menus(_hwnd: u64) -> Result<MenuSnapshot, String> {
-    Err("菜单检查仅支持 Windows".to_owned())
+    Err(
+        crate::locale::label("菜单检查仅支持 Windows", "Menu inspection requires Windows")
+            .to_owned(),
+    )
 }
 #[cfg(not(windows))]
 pub fn inspect_icons(_hwnd: u64) -> Result<IconSnapshot, String> {
-    Err("图标检查仅支持 Windows".to_owned())
+    Err(
+        crate::locale::label("图标检查仅支持 Windows", "Icon inspection requires Windows")
+            .to_owned(),
+    )
 }
 #[cfg(not(windows))]
 pub fn save_icon(_icon: &IconImage) -> Result<Option<String>, String> {
-    Err("图标保存对话框仅支持 Windows".to_owned())
+    Err(crate::locale::label(
+        "图标保存对话框仅支持 Windows",
+        "The icon save dialog requires Windows",
+    )
+    .to_owned())
 }
 
 fn encode_ico(icon: &IconImage) -> Result<Vec<u8>, String> {
     if icon.width == 0 || icon.height == 0 || icon.width > 256 || icon.height > 256 {
-        return Err("ICO 图标尺寸必须介于 1 和 256 像素之间".to_owned());
+        return Err(crate::locale::label(
+            "ICO 图标尺寸必须介于 1 和 256 像素之间",
+            "ICO dimensions must be between 1 and 256 pixels",
+        )
+        .to_owned());
     }
     let width = icon.width as usize;
     let height = icon.height as usize;
     if icon.rgba.len() != width * height * 4 {
-        return Err("图标 RGBA 数据长度与尺寸不符".to_owned());
+        return Err(crate::locale::label(
+            "图标 RGBA 数据长度与尺寸不符",
+            "The icon's RGBA data length does not match its dimensions",
+        )
+        .to_owned());
     }
     let mask_stride = width.div_ceil(32) * 4;
     let pixel_bytes = width * height * 4;
@@ -207,19 +225,30 @@ mod native {
     fn win32_error(operation: &str) -> String {
         let code = unsafe { GetLastError() };
         if code == 0 {
-            format!("{operation}失败；目标可能已关闭、无响应或不可访问")
+            crate::localized_format!("{operation}失败；目标可能已关闭、无响应或不可访问", "{operation} failed; the target may have closed, stopped responding, or become inaccessible")
         } else {
-            format!(
+            crate::localized_format!(
                 "{operation}失败（Win32 {code}：{}）",
+                "{operation} failed (Win32 {code}: {})",
                 std::io::Error::from_raw_os_error(code as i32)
             )
         }
     }
 
     fn checked_window(value: u64) -> Result<(HWND, (u32, u32)), String> {
-        let address = usize::try_from(value).map_err(|_| "窗口句柄超出指针宽度".to_owned())?;
+        let address = usize::try_from(value).map_err(|_| {
+            crate::locale::label(
+                "窗口句柄超出指针宽度",
+                "The window handle exceeds the pointer width",
+            )
+            .to_owned()
+        })?;
         if address == 0 || address == 0xffff {
-            return Err("请选择有效窗口；不能使用空句柄或广播句柄".to_owned());
+            return Err(crate::locale::label(
+                "请选择有效窗口；不能使用空句柄或广播句柄",
+                "Select a valid window; null and broadcast handles are not allowed",
+            )
+            .to_owned());
         }
         let hwnd = address as HWND;
         Ok((hwnd, identity(hwnd)?))
@@ -231,14 +260,18 @@ mod native {
         // fails or yields a different owner, checked again before publication.
         let tid = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
         if tid == 0 || pid == 0 || unsafe { IsWindow(hwnd) } == 0 {
-            return Err("窗口已关闭或句柄已失效，请重新选择".to_owned());
+            return Err(crate::locale::label(
+                "窗口已关闭或句柄已失效，请重新选择",
+                "The window has closed or its handle is no longer valid; select it again",
+            )
+            .to_owned());
         }
         Ok((pid, tid))
     }
 
     fn ensure_identity(hwnd: HWND, original: (u32, u32)) -> Result<(), String> {
         if identity(hwnd)? != original {
-            return Err("检查期间窗口句柄被重复使用；已丢弃结果，请重新选择".to_owned());
+            return Err(crate::locale::label("检查期间窗口句柄被重复使用；已丢弃结果，请重新选择", "The window handle was reused during inspection; results were discarded. Select it again").to_owned());
         }
         Ok(())
     }
@@ -253,10 +286,22 @@ mod native {
     impl MenuWalker {
         fn at_limit(&mut self) -> bool {
             if self.entries.len() >= MENU_MAX_ENTRIES {
-                warn(&mut self.warnings, "菜单项目已达到 4096 项上限，结果已截断");
+                warn(
+                    &mut self.warnings,
+                    crate::locale::label(
+                        "菜单项目已达到 4096 项上限，结果已截断",
+                        "The menu reached the 4096-item limit; results were truncated",
+                    ),
+                );
                 true
             } else if self.started.elapsed() >= INSPECTION_BUDGET {
-                warn(&mut self.warnings, "菜单读取超过 2 秒预算，结果已截断");
+                warn(
+                    &mut self.warnings,
+                    crate::locale::label(
+                        "菜单读取超过 2 秒预算，结果已截断",
+                        "Menu inspection exceeded its 2-second budget; results were truncated",
+                    ),
+                );
                 true
             } else {
                 false
@@ -270,17 +315,32 @@ mod native {
             if depth >= MENU_MAX_DEPTH {
                 warn(
                     &mut self.warnings,
-                    "菜单层级已达到 32 层上限，深层项目已省略",
+                    crate::locale::label(
+                        "菜单层级已达到 32 层上限，深层项目已省略",
+                        "The menu reached the 32-level depth limit; deeper items were omitted",
+                    ),
                 );
                 return;
             }
             if !self.seen.insert(menu as usize) {
-                warn(&mut self.warnings, "检测到重复菜单句柄，已跳过重复分支");
+                warn(
+                    &mut self.warnings,
+                    crate::locale::label(
+                        "检测到重复菜单句柄，已跳过重复分支",
+                        "A repeated menu handle was detected; the duplicate branch was skipped",
+                    ),
+                );
                 return;
             }
             let count = unsafe { GetMenuItemCount(menu) };
             if count < 0 {
-                warn(&mut self.warnings, win32_error("读取菜单项目数量"));
+                warn(
+                    &mut self.warnings,
+                    win32_error(crate::locale::label(
+                        "读取菜单项目数量",
+                        "Read menu item count",
+                    )),
+                );
                 return;
             }
             for position in 0..count as u32 {
@@ -295,7 +355,10 @@ mod native {
                 if unsafe { GetMenuItemInfoW(menu, position, 1, &mut info) } == 0 {
                     warn(
                         &mut self.warnings,
-                        "部分菜单项目读取失败；目标菜单可能正在变化",
+                        crate::locale::label(
+                            "部分菜单项目读取失败；目标菜单可能正在变化",
+                            "Some menu items could not be read; the target menu may be changing",
+                        ),
                     );
                     continue;
                 }
@@ -320,7 +383,7 @@ mod native {
                             if requested >= capacity {
                                 warn(
                                     &mut self.warnings,
-                                    "部分菜单文本超过 2047 个 UTF-16 单元，已截断",
+                                    crate::locale::label("部分菜单文本超过 2047 个 UTF-16 单元，已截断", "Some menu text exceeds 2047 UTF-16 units and was truncated"),
                                 );
                                 if length > 0 && (0xD800..=0xDBFF).contains(&text[length - 1]) {
                                     length -= 1;
@@ -330,15 +393,18 @@ mod native {
                         } else {
                             warn(
                                 &mut self.warnings,
-                                "部分菜单文本读取失败；目标菜单可能正在变化",
+                                crate::locale::label("部分菜单文本读取失败；目标菜单可能正在变化", "Some menu text could not be read; the target menu may be changing"),
                             );
                         }
                     }
                     if label.is_empty() {
                         label = if owner_draw {
-                            "[自绘菜单项：未提供文字]"
+                            crate::locale::label(
+                                "[自绘菜单项：未提供文字]",
+                                "[Owner-drawn menu item: no text provided]",
+                            )
                         } else {
-                            "[无文字菜单项]"
+                            crate::locale::label("[无文字菜单项]", "[Menu item without text]")
                         }
                         .to_owned();
                     }
@@ -347,7 +413,10 @@ mod native {
                 if submenu != info.hSubMenu {
                     warn(
                         &mut self.warnings,
-                        "菜单在读取期间发生变化；子菜单结果可能不完整",
+                        crate::locale::label(
+                            "菜单在读取期间发生变化；子菜单结果可能不完整",
+                            "The menu changed during inspection; submenu results may be incomplete",
+                        ),
                     );
                 }
                 self.entries.push(MenuEntry {
@@ -395,7 +464,7 @@ mod native {
                 {
                     walker.visit(bar.hMenu, 0);
                 } else {
-                    warn(&mut walker.warnings, "弹出菜单未提供可访问的原生菜单句柄，请使用窗口内容页的 UI Automation 读取可访问菜单项");
+                    warn(&mut walker.warnings, crate::locale::label("弹出菜单未提供可访问的原生菜单句柄，请使用窗口内容页的 UI Automation 读取可访问菜单项", "The popup did not provide an accessible native menu handle; use UI Automation on the Content page to read accessible menu items"));
                 }
             } else {
                 // FALSE retrieves the current system menu. TRUE would reset
@@ -404,11 +473,11 @@ mod native {
                 if !system_menu.is_null() {
                     warn(
                         &mut walker.warnings,
-                        "该窗口没有传统菜单栏；以下为窗口系统菜单（并非应用菜单栏）",
+                        crate::locale::label("该窗口没有传统菜单栏；以下为窗口系统菜单（并非应用菜单栏）", "This window has no traditional menu bar; the following items are from its window system menu, not the application's menu bar"),
                     );
                     walker.visit(system_menu, 0);
                 } else {
-                    warn(&mut walker.warnings, "未提供原生菜单；自绘、浏览器和现代应用菜单可在窗口内容页尝试 UI Automation");
+                    warn(&mut walker.warnings, crate::locale::label("未提供原生菜单；自绘、浏览器和现代应用菜单可在窗口内容页尝试 UI Automation", "No native menu was provided; try UI Automation on the Content page for owner-drawn, browser, and modern application menus"));
                 }
             }
         }
@@ -472,7 +541,11 @@ mod native {
             )
         };
         if copied != size_of::<BITMAP>() as i32 || details.bmWidth <= 0 || details.bmHeight == 0 {
-            return Err("图标位图信息无效".to_owned());
+            return Err(crate::locale::label(
+                "图标位图信息无效",
+                "Invalid icon bitmap information",
+            )
+            .to_owned());
         }
         Ok((
             details.bmWidth as u32,
@@ -487,7 +560,11 @@ mod native {
             || width > ICON_MAX_DIMENSION
             || height > ICON_MAX_DIMENSION * 2
         {
-            return Err("图标位图尺寸超过安全上限".to_owned());
+            return Err(crate::locale::label(
+                "图标位图尺寸超过安全上限",
+                "Icon bitmap dimensions exceed the safety limit",
+            )
+            .to_owned());
         }
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
         let mut info: BITMAPINFO = unsafe { zeroed() };
@@ -512,7 +589,10 @@ mod native {
             )
         };
         if lines != height as i32 {
-            return Err(win32_error("读取图标像素"));
+            return Err(win32_error(crate::locale::label(
+                "读取图标像素",
+                "Read icon pixels",
+            )));
         }
         Ok(pixels)
     }
@@ -524,34 +604,56 @@ mod native {
     ) -> Result<IconImage, String> {
         let mut info: ICONINFO = unsafe { zeroed() };
         if unsafe { GetIconInfo(icon.0, &mut info) } == 0 {
-            return Err(win32_error("读取图标位图"));
+            return Err(win32_error(crate::locale::label(
+                "读取图标位图",
+                "Read icon bitmap",
+            )));
         }
         // GetIconInfo creates both bitmaps. They must be released even when
         // later validation or allocation fails.
         let mask = OwnedBitmap(info.hbmMask);
         let color = OwnedBitmap(info.hbmColor);
         if mask.0.is_null() {
-            return Err("图标没有有效的透明蒙版".to_owned());
+            return Err(crate::locale::label(
+                "图标没有有效的透明蒙版",
+                "The icon has no valid transparency mask",
+            )
+            .to_owned());
         }
         let (mask_width, mask_height, _) = bitmap_dimensions(mask.0)?;
         let monochrome = color.0.is_null();
         let (width, height, bit_depth) = if monochrome {
             if mask_height % 2 != 0 {
-                return Err("单色图标的 AND/XOR 蒙版高度无效".to_owned());
+                return Err(crate::locale::label(
+                    "单色图标的 AND/XOR 蒙版高度无效",
+                    "Invalid AND/XOR mask height for the monochrome icon",
+                )
+                .to_owned());
             }
             (mask_width, mask_height / 2, 1)
         } else {
             bitmap_dimensions(color.0)?
         };
         if width == 0 || height == 0 || width > ICON_MAX_DIMENSION || height > ICON_MAX_DIMENSION {
-            return Err("图标超过 256 × 256 像素上限，已跳过".to_owned());
+            return Err(crate::locale::label(
+                "图标超过 256 × 256 像素上限，已跳过",
+                "The icon exceeds the 256 × 256 pixel limit and was skipped",
+            )
+            .to_owned());
         }
         if mask_width != width || mask_height != height * if monochrome { 2 } else { 1 } {
-            return Err("图标颜色位图与透明蒙版尺寸不一致".to_owned());
+            return Err(crate::locale::label(
+                "图标颜色位图与透明蒙版尺寸不一致",
+                "The icon color bitmap and transparency mask have different dimensions",
+            )
+            .to_owned());
         }
         let dc = ScreenDc(unsafe { GetDC(null_mut()) });
         if dc.0.is_null() {
-            return Err(win32_error("创建图标读取设备上下文"));
+            return Err(win32_error(crate::locale::label(
+                "创建图标读取设备上下文",
+                "Create an icon-reading device context",
+            )));
         }
         let mut mask_pixels = bitmap_bgra(dc.0, mask.0, mask_width, mask_height)?;
         let pixel_count = width as usize * height as usize * 4;
@@ -583,7 +685,7 @@ mod native {
             if inverted {
                 warn(
                     warnings,
-                    "图标含旧式背景反色像素；RGBA 预览和导出以黑底效果近似显示这些像素",
+                    crate::locale::label("图标含旧式背景反色像素；RGBA 预览和导出以黑底效果近似显示这些像素", "The icon contains legacy background-inversion pixels; the RGBA preview and export approximate these pixels against a black background"),
                 );
             }
         }
@@ -612,7 +714,16 @@ mod native {
                     snapshot.icons.push(icon);
                 }
             }
-            Err(error) => warn(&mut snapshot.warnings, format!("{kind}：{error}")),
+            Err(error) => {
+                let displayed_kind = crate::locale::icon_source_label(kind);
+                warn(
+                    &mut snapshot.warnings,
+                    crate::localized_format!(
+                        "{displayed_kind}：{error}",
+                        "{displayed_kind}: {error}"
+                    ),
+                );
+            }
         }
     }
 
@@ -624,9 +735,14 @@ mod native {
         // Copy immediately so later target updates cannot affect our bitmap.
         let owned = OwnedIcon(unsafe { CopyIcon(borrowed) });
         if owned.0.is_null() {
+            let displayed_kind = crate::locale::icon_source_label(kind);
             warn(
                 &mut snapshot.warnings,
-                format!("{kind}：{}", win32_error("复制图标")),
+                crate::localized_format!(
+                    "{displayed_kind}：{}",
+                    "{displayed_kind}: {}",
+                    win32_error(crate::locale::label("复制图标", "Copy icon"))
+                ),
             );
         } else {
             append_icon(snapshot, owned, kind);
@@ -641,26 +757,32 @@ mod native {
         let Some(root) = super::local_drive_root(path) else {
             warn(
                 warnings,
-                "已跳过程序文件图标：仅允许本地盘符绝对路径，不读取网络、设备或特殊路径",
+                crate::locale::label("已跳过程序文件图标：仅允许本地盘符绝对路径，不读取网络、设备或特殊路径", "Program-file icons were skipped: only absolute local drive-letter paths are allowed; network, device, and special paths are not read"),
             );
             return false;
         };
         if started.elapsed() >= INSPECTION_BUDGET {
-            warn(warnings, "图标读取已达到 2 秒预算，已跳过程序文件图标");
+            warn(
+                warnings,
+                crate::locale::label(
+                    "图标读取已达到 2 秒预算，已跳过程序文件图标",
+                    "Icon inspection reached its 2-second budget; program-file icons were skipped",
+                ),
+            );
             return false;
         }
         // DRIVE_FIXED = 3 is documented by GetDriveTypeW. Its constant lives
         // under a different optional windows-sys feature; no extra feature is
         // needed merely to compare this return value.
         if unsafe { GetDriveTypeW(root.as_ptr()) } != 3 {
-            warn(warnings, "已跳过程序文件图标：驱动器不是已确认的本地固定磁盘（网络、可移动或未知磁盘均不读取）");
+            warn(warnings, crate::locale::label("已跳过程序文件图标：驱动器不是已确认的本地固定磁盘（网络、可移动或未知磁盘均不读取）", "Program-file icons were skipped: the drive is not a confirmed local fixed disk; network, removable, and unknown drives are not read"));
             return false;
         }
         let mut prefix = path.to_vec();
         prefix.push(0);
         for end in (3..=path.len()).filter(|end| *end == path.len() || path[*end] == b'\\' as u16) {
             if started.elapsed() >= INSPECTION_BUDGET {
-                warn(warnings, "图标读取已达到 2 秒预算，已跳过程序文件图标");
+                warn(warnings, crate::locale::label("图标读取已达到 2 秒预算，已跳过程序文件图标", "Icon inspection reached its 2-second budget; program-file icons were skipped"));
                 return false;
             }
             let saved = prefix[end];
@@ -678,7 +800,7 @@ mod native {
             };
             prefix[end] = saved;
             if success == 0 {
-                warn(warnings, "已跳过程序文件图标：无法确认本地路径属性");
+                warn(warnings, crate::locale::label("已跳过程序文件图标：无法确认本地路径属性", "Program-file icons were skipped: local path attributes could not be verified"));
                 return false;
             }
             let forbidden = FILE_ATTRIBUTE_REPARSE_POINT
@@ -688,7 +810,7 @@ mod native {
             if metadata.dwFileAttributes & forbidden != 0 {
                 warn(
                     warnings,
-                    "已跳过程序文件图标：路径包含重解析点、离线文件或需要下载的云端文件",
+                    crate::locale::label("已跳过程序文件图标：路径包含重解析点、离线文件或需要下载的云端文件", "Program-file icons were skipped: the path contains a reparse point, offline file, or cloud file requiring download"),
                 );
                 return false;
             }
@@ -701,17 +823,29 @@ mod native {
                 {
                     warn(
                         warnings,
-                        "已跳过程序文件图标：仅读取不超过 64 MiB 的非空本地程序文件",
+                        crate::locale::label("已跳过程序文件图标：仅读取不超过 64 MiB 的非空本地程序文件", "Program-file icons were skipped: only nonempty local program files up to 64 MiB are read"),
                     );
                     return false;
                 }
             } else if metadata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
-                warn(warnings, "已跳过程序文件图标：父路径不是目录");
+                warn(
+                    warnings,
+                    crate::locale::label(
+                        "已跳过程序文件图标：父路径不是目录",
+                        "Program-file icons were skipped: the parent path is not a directory",
+                    ),
+                );
                 return false;
             }
         }
         if started.elapsed() >= INSPECTION_BUDGET {
-            warn(warnings, "图标读取已达到 2 秒预算，已跳过程序文件图标");
+            warn(
+                warnings,
+                crate::locale::label(
+                    "图标读取已达到 2 秒预算，已跳过程序文件图标",
+                    "Icon inspection reached its 2-second budget; program-file icons were skipped",
+                ),
+            );
             return false;
         }
         true
@@ -721,17 +855,32 @@ mod native {
         let process =
             ProcessHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) });
         if process.0.is_null() {
-            warn(&mut snapshot.warnings, win32_error("读取程序图标路径"));
+            warn(
+                &mut snapshot.warnings,
+                win32_error(crate::locale::label(
+                    "读取程序图标路径",
+                    "Read program icon path",
+                )),
+            );
             return;
         }
         let mut path = vec![0u16; 32_768];
         let mut count = path.len() as u32;
         if unsafe { QueryFullProcessImageNameW(process.0, 0, path.as_mut_ptr(), &mut count) } == 0 {
-            warn(&mut snapshot.warnings, win32_error("读取程序图标路径"));
+            warn(
+                &mut snapshot.warnings,
+                win32_error(crate::locale::label(
+                    "读取程序图标路径",
+                    "Read program icon path",
+                )),
+            );
             return;
         }
         if count == 0 || count as usize >= path.len() {
-            warn(&mut snapshot.warnings, "程序图标路径长度无效");
+            warn(
+                &mut snapshot.warnings,
+                crate::locale::label("程序图标路径长度无效", "Invalid program icon path length"),
+            );
             return;
         }
         path[count as usize] = 0;
@@ -752,11 +901,14 @@ mod native {
         if started.elapsed() >= INSPECTION_BUDGET {
             warn(
                 &mut snapshot.warnings,
-                "本地程序文件图标读取超过 2 秒；Windows 磁盘和资源读取调用无法在进程内强制中止",
+                crate::locale::label("本地程序文件图标读取超过 2 秒；Windows 磁盘和资源读取调用无法在进程内强制中止", "Local program-file icon inspection exceeded 2 seconds; Windows disk and resource-reading calls cannot be forcibly stopped within the process"),
             );
         }
         if result == u32::MAX {
-            warn(&mut snapshot.warnings, win32_error("提取程序图标"));
+            warn(
+                &mut snapshot.warnings,
+                win32_error(crate::locale::label("提取程序图标", "Extract program icon")),
+            );
             return;
         }
         if !small.0.is_null() {
@@ -786,7 +938,7 @@ mod native {
                 if started.elapsed() >= INSPECTION_BUDGET {
                     warn(
                         &mut snapshot.warnings,
-                        "图标读取已达到 2 秒预算，已停止其他查询",
+                        crate::locale::label("图标读取已达到 2 秒预算，已停止其他查询", "Icon inspection reached its 2-second budget; remaining queries were stopped"),
                     );
                     break;
                 }
@@ -810,7 +962,7 @@ mod native {
                 if success == 0 {
                     warn(
                         &mut snapshot.warnings,
-                        "窗口图标查询超时或被目标拒绝；继续尝试窗口类图标",
+                        crate::locale::label("窗口图标查询超时或被目标拒绝；继续尝试窗口类图标", "The window icon query timed out or was rejected; trying window-class icons instead"),
                     );
                     break;
                 }
@@ -819,7 +971,7 @@ mod native {
         } else {
             warn(
                 &mut snapshot.warnings,
-                "自身窗口跳过同步图标消息，仅尝试窗口类和程序文件图标",
+                crate::locale::label("自身窗口跳过同步图标消息，仅尝试窗口类和程序文件图标", "Synchronous icon messages are skipped for this program's own windows; only window-class and program-file icons are tried"),
             );
         }
         ensure_identity(hwnd, owner)?;
@@ -838,7 +990,7 @@ mod native {
         if snapshot.icons.is_empty() {
             warn(
                 &mut snapshot.warnings,
-                "该窗口未提供可读取图标，或当前权限不允许访问",
+                crate::locale::label("该窗口未提供可读取图标，或当前权限不允许访问", "This window provided no readable icon, or access is not permitted at the current privilege level"),
             );
         }
         Ok(snapshot)
@@ -860,16 +1012,28 @@ mod native {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err("已有图标保存对话框打开，请先完成或取消它".to_owned());
+            return Err(crate::locale::label(
+                "已有图标保存对话框打开，请先完成或取消它",
+                "An icon save dialog is already open; finish or cancel it first",
+            )
+            .to_owned());
         }
         let _guard = SaveDialogGuard;
         let mut file = vec![0u16; 32_768];
         for (out, unit) in file.iter_mut().zip("CoralSpyNext-icon.ico".encode_utf16()) {
             *out = unit;
         }
-        let filter: Vec<u16> = "Windows 图标 (*.ico)\0*.ico\0\0".encode_utf16().collect();
+        let filter: Vec<u16> = crate::locale::label(
+            "Windows 图标 (*.ico)\0*.ico\0\0",
+            "Windows icons (*.ico)\0*.ico\0\0",
+        )
+        .encode_utf16()
+        .collect();
         let extension: Vec<u16> = "ico\0".encode_utf16().collect();
-        let title: Vec<u16> = "保存 CoralSpyNext 图标\0".encode_utf16().collect();
+        let title: Vec<u16> =
+            crate::locale::label("保存 CoralSpyNext 图标\0", "Save CoralSpyNext icon\0")
+                .encode_utf16()
+                .collect();
         let foreground = unsafe { GetForegroundWindow() };
         let owner = if identity(foreground)
             .is_ok_and(|owner| owner.0 == unsafe { GetCurrentProcessId() })
@@ -893,20 +1057,33 @@ mod native {
             return if code == 0 {
                 Ok(None)
             } else {
-                Err(format!("图标保存对话框失败（0x{code:08X}）"))
+                Err(crate::localized_format!(
+                    "图标保存对话框失败（0x{code:08X}）",
+                    "Icon save dialog failed (0x{code:08X})"
+                ))
             };
         }
-        let length = file
-            .iter()
-            .position(|unit| *unit == 0)
-            .ok_or_else(|| "保存路径缺少结束符".to_owned())?;
+        let length = file.iter().position(|unit| *unit == 0).ok_or_else(|| {
+            crate::locale::label(
+                "保存路径缺少结束符",
+                "The save path is missing its terminator",
+            )
+            .to_owned()
+        })?;
         if length == 0 {
-            return Err("未选择保存路径".to_owned());
+            return Err(
+                crate::locale::label("未选择保存路径", "No save path was selected").to_owned(),
+            );
         }
         // Preserve exact UTF-16 for filesystem access, including paths which
         // cannot be represented losslessly by a Rust UTF-8 String.
         let path = PathBuf::from(OsString::from_wide(&file[..length]));
-        std::fs::write(&path, bytes).map_err(|error| format!("无法保存 ICO 图标：{error}"))?;
+        std::fs::write(&path, bytes).map_err(|error| {
+            crate::localized_format!(
+                "无法保存 ICO 图标：{error}",
+                "Could not save the ICO icon: {error}"
+            )
+        })?;
         Ok(Some(path.to_string_lossy().into_owned()))
     }
     #[cfg(test)]
