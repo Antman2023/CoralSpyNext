@@ -15,7 +15,7 @@
 
 ## 下载和运行
 
-便携预览包会放在本仓库的 [Releases](https://github.com/Antman2023/CoralSpyNext/releases)。下载 `CoralSpyNext-windows-x64.zip`，解压后运行 `coralspynext.exe`。产物内还有说明和 SHA-256 校验值。
+本仓库提供完整可构建源码。便携预览包由维护者单独提供：取得 `CoralSpyNext-windows-x64.zip` 后，解压并运行 `coralspynext.exe`。包内还有说明和 SHA-256 校验值；仓库当前没有 GitHub Release 或活动 CI 产物。
 
 初版可执行文件通过 Linux → Windows GNU 交叉编译生成，尚未在 Windows 11 桌面交互测试。
 

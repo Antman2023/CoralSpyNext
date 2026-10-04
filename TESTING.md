@@ -6,6 +6,13 @@
 
 提供了 Windows 构建工作流模板，可执行 fmt、Clippy、全部测试、release 编译和产物打包；初版未启用此工作流，未运行 Windows runner。`tests/windows_backend_tests.rs` 包含创建自有 Win32 窗口的元数据/隐私/失效句柄测试，已交叉编译检查，尚未运行。
 
+## 初版已完成的构建检查
+
+- Linux：6项模型测试通过。
+- Windows GNU x64 目标：全部 target 的类型检查、Clippy（warnings denied）通过，release EXE 链接成功。
+- PE32+ / x86-64 / GUI 子系统确认；导入仅 Windows 系统 DLL，不需附带 MinGW DLL。
+- Win32 fixture 测试仅编译检查；没有执行 Windows 测试或桌面 GUI。
+
 ## Windows 11 人工验收清单（初版未实机执行）
 
 - [ ] 无管理员权限启动；无控制台窗口；中文文本正常。
