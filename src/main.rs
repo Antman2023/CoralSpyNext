@@ -2,6 +2,8 @@
 
 #[cfg(windows)]
 mod app;
+#[cfg(any(windows, test))]
+mod hook_ui;
 
 #[cfg(windows)]
 fn main() {

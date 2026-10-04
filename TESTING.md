@@ -1,13 +1,14 @@
-# 验证与验收范围（0.2.1）
+# 验证与验收范围（0.3.0）
 
 ## 已执行的本地检查
 
-在 Linux 环境执行46项平台无关Rust单元测试。另有Windows-only图标映射与英文报告数据保真测试已交叉编译但未运行。当前覆盖：
+在 Linux 环境执行主程序与Hook协议/客户端的平台无关Rust单元测试；本次确切数量记录于包内BUILD-INFO.json。另有Windows-only图标映射与英文报告数据保真测试已交叉编译但未运行。当前覆盖：
 - x64 句柄、颜色编码、负坐标、尺寸溢出、Unicode 搜索和 JSON 往返
 - 配置校验、重复热键、热键掩码和序列化
 - ICO/BGRA、上下翻转、透明 alpha、AND mask、尺寸边界和资源路径政策
 - 逻辑条目计数、表格嵌套单元格、跨 Tree 根层级、RichEdit 原文本、截断警告和保护标记
 - RTF 转义、中文/emoji、LF/CRLF/CR 换行
+- Hook请求/回复边界、双架构ABI、20,000次确定性畸形输入、真实表头/空表/TSV保真、完整原始RTF导出门控
 
 Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查在开发机交叉执行。以发布包 `BUILD-INFO.json` 的对应提交和执行结果为准。
 
@@ -22,6 +23,12 @@ Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查�
 
 这些 Windows 测试尚未在 Windows 11 执行。不得把 Linux 测试的 `0 Windows tests` 当成 fixture 成功。Windows 托管 runner 也未启用：当前 GitHub 凭据无 workflow 写入权限，只提供 `ci/windows.yml.example`。
 
+## 新增Hook自有控件验收（已编译，未运行）
+
+见[专用fixture说明](hook-engine/docs/fixture-tests.md)。包内tests/hook-fixtures含x86/x64自有控件和PowerShell 7脚本，执行时必须显式传入-RunOwnedFixture；默认仅面向新启动的自有控件。桌面全局模式另需两个隔离测试开关，日常运行不启用。
+
+覆盖原始RTF字节、ListView表头/单元格、TreeView层级、菜单、密码拒绝、错目标/架构、上限截断、超时、stdin EOF/显式取消、辅助进程强制结束、之后恢复和模块卸载。测试脚本尚未经Windows PowerShell解析/运行，其预期断言不是通过记录。
+
 ## 必须进行的 Windows 11 人工验收
 
 参照 [逐项清单](docs/ORIGINAL_FEATURE_INVENTORY.md) 验证每一个可恢复的原版入口，尤其：
@@ -32,7 +39,7 @@ Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查�
 - [ ] 频繁更换/关闭/重建目标后不显示旧结果；同PID/类快速句柄复用的限制明确。
 - [ ] 真实 ListBox/ComboBox 条目、ListView 列/行和100行预览；保存包含全部已捕获数据及限制警告。
 - [ ] TreeView 根与子项正常，展开/收起只改变本地视图；多个Tree不串层级。
-- [ ] RichEdit复制原文本、中文emoji及各种换行；RTF可打开，并明确未声称原始格式/对象保真。
+- [ ] RichEdit的UIA文本与Hook原始RTF路径清楚分离；完整原始流与自有fixture黄金SF_RTF逐字节相等，截断不可保存为完整文档。
 - [ ] 密码/未知保护属性不会暴露内容，父节点聚合文本也不会绕过保护。
 - [ ] 菜单栏/系统菜单/弹出菜单状态与ID，ICO透明预览、图标点击保存。
 - [ ] 现存MSHTML宿主的源码/框架/表单/链接/图片/遗留Flash引用；受保护字段抑制源码。
@@ -43,7 +50,9 @@ Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查�
 - [ ] 热键冲突、切换三组键、临时注册/取消、重复打开选项后取消、设置落盘失败均可恢复。
 - [ ] 中英文主要界面、托盘菜单、明暗、置顶和设置重启持久化。
 - [ ] 每一页的复制/保存对象和当前页/当前目标一致；中文路径、取消、覆盖提示正确。
-- [ ] 子进程超过8秒/下载30秒时可停止，不留下后台检查进程；退出清理托盘与热键。
+- [ ] UIA子进程8秒/下载30秒预算，退出清理托盘与热键。
+- [ ] Hook目标确认、可见指示、取消/关闭/退出、超时与卡死控件恢复；单次5秒/硬上限10秒，不能将目标回调阻塞误报为可强制中断。
+- [ ] 两个固定broker均随主程序分发；x86/x64目标正确选择；不同用户/完整性级别/保护进程拒绝。
 
 ## 尚不能证明的部分
 

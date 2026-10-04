@@ -1,3 +1,4 @@
+# Inert template. No GitHub workflow has been enabled or run for this project.
 name: Windows build
 on:
   push:
@@ -10,31 +11,50 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Rust toolchain
+      - name: Rust toolchain and matching architectures
         shell: pwsh
         run: |
           rustup toolchain install 1.99.0 --profile minimal --no-self-update
           rustup default 1.99.0
           rustup component add rustfmt clippy
+          rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
           rustc -Vv
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Unit tests
-        run: cargo test --locked --all-targets
-      - name: Release build
-        run: cargo build --locked --release
-      - name: Package
+      - name: Build GUI and fixed x86/x64 brokers
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+      - name: Format and strict Clippy
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/CoralSpyNext | Out-Null
-          Copy-Item target/release/coralspynext.exe dist/CoralSpyNext/
-          Copy-Item README.md,LICENSE,THIRD_PARTY.md dist/CoralSpyNext/
-          Get-FileHash dist/CoralSpyNext/coralspynext.exe -Algorithm SHA256 | Format-List | Out-File dist/CoralSpyNext/SHA256.txt
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Push-Location hook-engine
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($target in 'x86_64-pc-windows-msvc', 'i686-pc-windows-msvc') {
+            cargo clippy --locked --workspace --all-targets --target $target -- -D warnings
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          Pop-Location
+      - name: Unit tests and owned core Win32 fixtures
+        shell: pwsh
+        run: |
+          cargo test --locked --all-targets
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Push-Location hook-engine
+          cargo test --locked --workspace --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+      - name: Package all three required executables
+        shell: pwsh
+        run: |
+          foreach ($name in 'coralspynext.exe', 'coralspy-hook-broker-x64.exe', 'coralspy-hook-broker-x86.exe') {
+            if (!(Test-Path "dist/CoralSpyNext/$name")) { throw "Missing $name" }
+          }
           Compress-Archive -Path dist/CoralSpyNext -DestinationPath dist/CoralSpyNext-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -42,3 +62,5 @@ jobs:
           path: dist/CoralSpyNext-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
+# The dedicated hook integration harness remains a separate, opt-in interactive
+# Windows fixture test. CI unit tests are not a substitute for live hook QA.

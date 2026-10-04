@@ -1,0 +1,10 @@
+[package]
+name = "coralspy-hook-protocol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "MIT"
+description = "Bounded pointer-free IPC for CoralSpyNext fixed-function debug hooks"
+
+[lib]
+path = "src/lib.rs"

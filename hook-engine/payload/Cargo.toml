@@ -1,0 +1,16 @@
+[package]
+name = "coralspy-hook-payload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "coralspy_hook_payload"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+coralspy-hook-protocol = { path = "../protocol" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

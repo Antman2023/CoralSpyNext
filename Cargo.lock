@@ -252,9 +252,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "coralspynext"
-version = "0.2.1"
+name = "coralspy-hook-client"
+version = "0.1.0"
 dependencies = [
+ "coralspy-hook-protocol",
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "coralspy-hook-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "coralspynext"
+version = "0.3.0"
+dependencies = [
+ "coralspy-hook-client",
  "eframe",
  "embed-resource",
  "raw-window-handle",

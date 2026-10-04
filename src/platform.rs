@@ -639,6 +639,21 @@ pub fn save_text_dialog(text: &str, json: bool) -> Result<Option<String>, String
 
 /// Explicit export formats, with native cancellation and overwrite confirmation.
 pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> {
+    let exported = if matches!(format, "html" | "htm") {
+        // BOM overrides old GBK/GB2312 metadata; copied source stays unchanged.
+        format!(
+            "\u{feff}<!-- saved from url=(0014)about:internet -->\n{}",
+            text.trim_start_matches('\u{feff}')
+        )
+    } else {
+        text.to_owned()
+    };
+    save_bytes_as(exported.as_bytes(), format)
+}
+
+/// Byte-preserving export for complete raw RichEdit RTF and other fixed formats.
+/// The caller must reject truncated captures; this function never converts bytes.
+pub fn save_bytes_as(bytes: &[u8], format: &str) -> Result<Option<String>, String> {
     let (name, filter_text, extension_text) = match format {
         "json" => (
             "CoralSpyNext-window.json",
@@ -752,22 +767,13 @@ pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> 
     // Preserve even non-Unicode Windows paths for I/O; lossy conversion is
     // used only in the success message, not for choosing the output file.
     let path = PathBuf::from(OsString::from_wide(&file[..length]));
-    let html = matches!(format, "html" | "htm");
-    let exported = if html {
-        // BOM takes precedence over legacy GBK/GB2312 meta declarations.
-        format!(
-            "\u{feff}<!-- saved from url=(0014)about:internet -->\n{}",
-            text.trim_start_matches('\u{feff}')
-        )
-    } else {
-        text.to_owned()
-    };
-    std::fs::write(&path, exported.as_bytes()).map_err(|error| {
+    let active_document = matches!(format, "html" | "htm" | "rtf");
+    std::fs::write(&path, bytes).map_err(|error| {
         crate::localized_format!("无法保存文件：{error}", "Could not save the file: {error}")
     })?;
-    if html {
+    if active_document {
         // Best effort Internet-zone ADS; the HTML Mark-of-the-Web above remains
-        // on file systems without alternate data streams. Do not execute HTML.
+        // on HTML files without alternate data streams. Do not execute document content.
         let mut zone = path.as_os_str().to_owned();
         zone.push(":Zone.Identifier");
         let _ = std::fs::write(PathBuf::from(zone), b"[ZoneTransfer]\r\nZoneId=3\r\n");

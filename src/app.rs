@@ -1,4 +1,9 @@
 //! Classic native multi-window UI with one bounded background command worker.
+use crate::hook_ui;
+use coralspy_hook_client::{
+    self as hook, Architecture, CaptureData, CaptureError, CaptureLimits, CaptureRequest,
+    ErrorCode, Operation, Target, UiLanguage,
+};
 use coralspynext::{
     accessibility,
     config::{self, AppSettings},
@@ -16,7 +21,11 @@ use eframe::egui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
-    sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -66,6 +75,13 @@ enum DetailPayload {
     Legacy(LegacySnapshot),
     Action(String, bool),
 }
+struct HookConfirmation {
+    operation: Operation,
+    target: Option<WindowInfo>,
+    selection_epoch: u64,
+    architecture: Architecture,
+    consent: bool,
+}
 enum Job {
     Inspect {
         id: u64,
@@ -92,6 +108,16 @@ enum Job {
         text: String,
         format: &'static str,
     },
+    Hook {
+        id: u64,
+        request: CaptureRequest,
+        expected: Option<WindowInfo>,
+        cancel: Arc<AtomicBool>,
+    },
+    SaveRawRtf {
+        id: u64,
+        bytes: Vec<u8>,
+    },
     Download {
         id: u64,
         url: String,
@@ -105,11 +131,17 @@ impl Job {
             | Self::Details { id, .. }
             | Self::SaveIcon { id, .. }
             | Self::SaveNamed { id, .. }
-            | Self::Download { id, .. } => *id,
+            | Self::Download { id, .. }
+            | Self::Hook { id, .. }
+            | Self::SaveRawRtf { id, .. } => *id,
         }
     }
 }
 enum Reply {
+    Hook {
+        id: u64,
+        result: Result<Box<hook_ui::Snapshot>, CaptureError>,
+    },
     Inspected {
         id: u64,
         hwnd: u64,
@@ -128,9 +160,10 @@ enum Reply {
 impl Reply {
     fn id(&self) -> u64 {
         match self {
-            Self::Inspected { id, .. } | Self::Exported { id, .. } | Self::Details { id, .. } => {
-                *id
-            }
+            Self::Inspected { id, .. }
+            | Self::Exported { id, .. }
+            | Self::Details { id, .. }
+            | Self::Hook { id, .. } => *id,
         }
     }
 }
@@ -171,6 +204,12 @@ impl Worker {
                         Job::SaveNamed { id, text, format } => Reply::Exported {
                             id,
                             result: platform::save_text_as(&text, format),
+                        },
+                        Job::SaveRawRtf { id, bytes } => Reply::Exported {
+                            id, result: platform::save_bytes_as(&bytes, "rtf"),
+                        },
+                        Job::Hook { id, request, expected, cancel } => Reply::Hook {
+                            id, result: capture_hook(request, expected, &cancel).map(Box::new),
                         },
                         Job::Download { id, url } => Reply::Exported {
                             id,
@@ -286,6 +325,14 @@ pub struct CoralSpyApp {
     hotkeys_tested: bool,
     menu_capture: bool,
     legacy_more: bool,
+    pending_hook: Option<Job>,
+    hook_id: u64,
+    hook_running_id: Option<u64>,
+    closing_after_hook: bool,
+    hook_cancel: Option<Arc<AtomicBool>>,
+    hook_confirmation: Option<HookConfirmation>,
+    hook_result: Option<hook_ui::Snapshot>,
+    hook_error: Option<CaptureError>,
 }
 impl CoralSpyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -355,6 +402,14 @@ impl CoralSpyApp {
             hotkeys_tested: false,
             menu_capture: false,
             legacy_more: false,
+            pending_hook: None,
+            hook_id: 0,
+            hook_running_id: None,
+            closing_after_hook: false,
+            hook_cancel: None,
+            hook_confirmation: None,
+            hook_result: None,
+            hook_error: None,
         };
         let registration = app.desktop.as_ref().map(|service| {
             let handle = cc.window_handle().map_err(|e| {
@@ -410,6 +465,7 @@ impl CoralSpyApp {
         if self.worker_failed {
             return;
         }
+        self.clear_hook();
         let id = self.id();
         self.inspect_id = id;
         self.detail_id = id;
@@ -453,7 +509,9 @@ impl CoralSpyApp {
         self.pending_export = Some(Job::Export { id, text, json });
     }
     fn fail_worker(&mut self) {
+        self.clear_hook();
         self.worker_failed = true;
+        self.hook_running_id = None;
         self.in_flight = None;
         self.inspecting = false;
         self.reading_details = false;
@@ -476,7 +534,30 @@ impl CoralSpyApp {
                     if self.in_flight == Some(reply.id()) {
                         self.in_flight = None;
                     }
+                    if matches!(&reply, Reply::Hook { id, .. } if Some(*id) == self.hook_running_id)
+                    {
+                        self.hook_running_id = None;
+                    }
                     match reply {
+                        Reply::Hook { id, result } if id == self.hook_id => {
+                            self.hook_cancel = None;
+                            self.reading_details = false;
+                            match result {
+                                Ok(snapshot) => {
+                                    self.content_warning.clear();
+                                    self.hook_result = Some(*snapshot);
+                                    self.notify(self.tr("本次 Hook 已结束，内容仅保留在内存中。", "This Hook capture finished. Content is held in memory only."), false);
+                                    self.rebuild_rows();
+                                }
+                                Err(error) => {
+                                    self.notify(
+                                        hook_ui::error_text(&error, self.english),
+                                        error.code != ErrorCode::Cancelled,
+                                    );
+                                    self.hook_error = Some(error);
+                                }
+                            }
+                        }
                         Reply::Inspected { id, hwnd, result }
                             if id == self.inspect_id && self.selected == Some(hwnd) =>
                         {
@@ -619,14 +700,22 @@ impl CoralSpyApp {
                 .pending_export
                 .take()
                 .or_else(|| self.pending_inspect.take())
+                .or_else(|| self.pending_hook.take())
                 .or_else(|| self.pending_detail.take());
             if let Some(job) = job {
                 let id = job.id();
+                let hook_job = matches!(&job, Job::Hook { .. });
                 match self.worker.sender.try_send(job) {
-                    Ok(()) => self.in_flight = Some(id),
+                    Ok(()) => {
+                        self.in_flight = Some(id);
+                        if hook_job {
+                            self.hook_running_id = Some(id);
+                        }
+                    }
                     Err(TrySendError::Full(job)) => match job {
                         Job::Inspect { .. } => self.pending_inspect = Some(job),
                         Job::Details { .. } => self.pending_detail = Some(job),
+                        Job::Hook { .. } => self.pending_hook = Some(job),
                         _ => self.pending_export = Some(job),
                     },
                     Err(TrySendError::Disconnected(_)) => self.fail_worker(),
@@ -985,6 +1074,7 @@ impl CoralSpyApp {
     }
     fn queue_detail(&mut self, kind: DetailKind) {
         self.cancel_pick();
+        self.clear_hook();
         let Some(hwnd) = self.selected else {
             self.content_warning = self
                 .tr(
@@ -1031,6 +1121,15 @@ impl CoralSpyApp {
     fn rebuild_rows(&mut self) {
         self.content_rows.clear();
         self.selected_row = None;
+        if let Some(snapshot) = self
+            .hook_result
+            .as_ref()
+            .filter(|snapshot| snapshot.applies_to(self.detail_tab))
+        {
+            self.content_rows = snapshot.rows(self.english);
+            self.content_text = snapshot.report(self.english);
+            return;
+        }
         if self.detail_tab == 6 {
             if let Some(menu) = &self.menu_snapshot {
                 for entry in &menu.entries {
@@ -1558,6 +1657,257 @@ impl CoralSpyApp {
             });
         });
     }
+    fn clear_hook(&mut self) {
+        if let Some(cancel) = self.hook_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
+        self.pending_hook = None;
+        self.hook_confirmation = None;
+        if self.hook_result.take().is_some() {
+            self.content_rows.clear();
+            self.content_text.clear();
+            self.selected_row = None;
+        }
+        self.hook_error = None;
+        self.hook_id = self.id();
+    }
+    fn confirm_hook(&mut self, operation: Operation) {
+        self.cancel_pick();
+        if self.worker_failed
+            || self.in_flight.is_some()
+            || self.reading_details
+            || self.inspecting
+            || self.exporting
+        {
+            return;
+        }
+        let target = if operation == Operation::MenuDesktopOnce {
+            None
+        } else {
+            let Some(info) = self.info.as_ref().filter(|info| {
+                Some(info.hwnd) == self.selected
+                    && self.selected_identity.as_ref() == Some(&(info.pid, info.class_name.clone()))
+            }) else {
+                return;
+            };
+            Some(info.clone())
+        };
+        self.hook_confirmation = Some(HookConfirmation {
+            operation,
+            target,
+            selection_epoch: self.inspect_id,
+            architecture: Architecture::X64,
+            consent: false,
+        });
+        self.hook_error = None;
+    }
+    fn start_hook(&mut self, confirmation: HookConfirmation) {
+        if !confirmation.consent
+            || confirmation.selection_epoch != self.inspect_id
+            || self.worker_failed
+            || self.in_flight.is_some()
+        {
+            return;
+        }
+        if let Some(info) = &confirmation.target {
+            if self.info.as_ref().is_none_or(|current| {
+                current.hwnd != info.hwnd
+                    || current.pid != info.pid
+                    || current.tid != info.tid
+                    || current.class_name != info.class_name
+            }) {
+                return;
+            }
+        }
+        self.clear_hook();
+        self.content_snapshot = None;
+        self.menu_snapshot = None;
+        self.content_rows.clear();
+        self.content_text.clear();
+        self.content_warning.clear();
+        self.selected_row = None;
+        let id = self.id();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let desktop = confirmation.operation == Operation::MenuDesktopOnce;
+        let request = CaptureRequest {
+            operation: confirmation.operation,
+            architecture: confirmation.architecture,
+            target: confirmation.target.as_ref().map(|info| Target {
+                hwnd: info.hwnd,
+                pid: info.pid,
+                tid: info.tid,
+            }),
+            limits: CaptureLimits {
+                timeout_ms: if desktop { 10_000 } else { 5_000 },
+                ..CaptureLimits::default()
+            },
+            visible_capture_consent: true,
+            desktop_menu_consent: desktop,
+            language: if self.english {
+                UiLanguage::English
+            } else {
+                UiLanguage::SimplifiedChinese
+            },
+        };
+        self.hook_id = id;
+        self.detail_id = id;
+        self.pending_detail = None;
+        self.reading_details = true;
+        self.hook_cancel = Some(Arc::clone(&cancel));
+        self.pending_hook = Some(Job::Hook {
+            id,
+            request,
+            expected: confirmation.target,
+            cancel,
+        });
+        self.notify(
+            self.tr(
+                "正在启动可见的一次性 Hook；可随时取消。",
+                "Starting a visible one-shot Hook capture; you can cancel at any time.",
+            ),
+            false,
+        );
+    }
+    fn hook_controls(&mut self, ui: &mut egui::Ui) {
+        let Some(operation) = hook_ui::operation_for_tab(self.detail_tab) else {
+            return;
+        };
+        let ready = !self.worker_failed
+            && self.in_flight.is_none()
+            && !self.inspecting
+            && !self.reading_details
+            && !self.exporting;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    ready && self.info.is_some(),
+                    egui::Button::new(self.tr("Hook 读取…", "Read via Hook…")),
+                )
+                .clicked()
+            {
+                self.confirm_hook(operation);
+            }
+            if self.detail_tab == 6
+                && ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(self.tr("桌面菜单一次…", "Desktop menu once…")),
+                    )
+                    .clicked()
+            {
+                self.confirm_hook(Operation::MenuDesktopOnce);
+            }
+        });
+        if let Some(error) = &self.hook_error {
+            ui.colored_label(
+                Color32::from_rgb(170, 65, 30),
+                hook_ui::error_text(error, self.english),
+            );
+            ui.small(self.tr(
+                "需要时可自行点击“API 读取”尝试标准接口。",
+                "You may explicitly choose Read via API to try the standard interface.",
+            ));
+            egui::CollapsingHeader::new(self.tr("技术信息", "Technical details")).show(ui, |ui| {
+                ui.label(&error.message);
+            });
+        }
+        if let Some(snapshot) = self
+            .hook_result
+            .as_ref()
+            .filter(|snapshot| snapshot.applies_to(self.detail_tab))
+        {
+            let source = &snapshot.result.actual_target;
+            ui.small(format!(
+                "Hook · {} · HWND {} · PID {} / TID {}",
+                hook_ui::architecture_name(snapshot.architecture),
+                hwnd_text(source.hwnd),
+                source.pid,
+                source.tid
+            ));
+            if let Some(info) = &snapshot.source {
+                ui.small(format!("{} · {}", info.process_name, info.class_name));
+            } else {
+                ui.small(self.tr("进程/类名现已不可查询；以上身份来自本次捕获。", "Process/class details are no longer queryable; the identity above comes from this capture."));
+            }
+            ui.small(snapshot.counts(self.english));
+            if matches!(snapshot.result.data, CaptureData::ListView { .. }) {
+                ui.small(self.tr("列标题为控件原文；空标题保持为空，未捕获标题的列使用序号。", "Headers are original control text. Empty headings stay empty; columns without a captured header use an ordinal label."));
+            }
+            if snapshot.result.truncated {
+                ui.colored_label(Color32::from_rgb(170,65,30),self.tr("已截断：达到数量、长度、大小或时间限制；内容不完整。", "Truncated: a count, text, size, or time limit was reached. Content is incomplete."));
+            }
+            if let CaptureData::RichEditRtf { .. } = &snapshot.result.data {
+                let bytes = snapshot.result.complete_rtf_bytes().map(<[u8]>::to_vec);
+                let complete = bytes.is_some();
+                if ui
+                    .add_enabled(
+                        complete && !self.exporting,
+                        egui::Button::new(self.tr("保存原始 RTF", "Save original RTF")),
+                    )
+                    .clicked()
+                {
+                    if let Some(bytes) = bytes {
+                        let id = self.id();
+                        self.exporting = true;
+                        self.pending_export = Some(Job::SaveRawRtf { id, bytes });
+                    }
+                }
+                if !complete {
+                    ui.small(self.tr(
+                        "原始 RTF 流不完整，已禁用 .rtf 文档导出。",
+                        "The original RTF stream is incomplete. RTF document export is disabled.",
+                    ));
+                }
+            }
+        } else if self.content_snapshot.is_some() || self.menu_snapshot.is_some() {
+            ui.small(self.tr(
+                "来源：标准 API / UI Automation 快照",
+                "Source: standard API / UI Automation snapshot",
+            ));
+        }
+        let Some(mut confirmation) = self.hook_confirmation.take() else {
+            return;
+        };
+        if confirmation.selection_epoch != self.inspect_id {
+            return;
+        }
+        let mut start = false;
+        let mut dismiss = false;
+        ui.group(|ui| {
+            ui.strong(format!("{}: {}", self.tr("确认一次读取", "Confirm one capture"), hook_ui::operation_name(confirmation.operation,self.english)));
+            if let Some(info) = &confirmation.target {
+                ui.label(format!("HWND {}\nPID {} / TID {}\n{}\n{}",hwnd_text(info.hwnd),info.pid,info.tid,info.process_name,info.class_name));
+                ui.small(self.tr("仅所选线程；架构自动检测（x86 / x64）。固定组件会暂时加载到此目标进程，并在请求结束时移除 Hook。", "Selected thread only; architecture is detected automatically (x86 / x64). The fixed component temporarily loads into this target process; the Hook is removed when the request ends."));
+            } else {
+                ui.colored_label(Color32::from_rgb(170,65,30),self.tr("桌面范围：仅捕获所选架构中下一次打开的原生菜单。", "Desktop scope: capture only the next opened native menu of the chosen architecture."));
+                ui.horizontal(|ui| {
+                    ui.label(self.tr("此次架构", "Architecture for this capture"));
+                    ui.selectable_value(&mut confirmation.architecture,Architecture::X64,"x64");
+                    ui.selectable_value(&mut confirmation.architecture,Architecture::X86,"x86");
+                });
+                ui.small(self.tr("不是同时捕获两种架构。开始后请打开目标菜单；最多 10 秒自动结束。临时 Hook 可加载到该架构的桌面应用；不持续监视。", "Both architectures are not captured together. Open the target menu after starting; capture ends within 10 seconds. The temporary Hook may load into desktop apps of this architecture; it does not keep monitoring."));
+            }
+            if confirmation.operation == Operation::MenuTarget {
+                ui.small(self.tr("请选择菜单所属的主窗口。开始后在 5 秒内打开该窗口菜单；弹出菜单自身不是此 Hook 的目标。", "Select the window that owns the menu. Open that window's menu within 5 seconds after starting; the popup itself is not this Hook's target."));
+            }
+            ui.small(self.tr("可见状态条和取消按钮；拒绝高权限、不匹配架构和受保护控件。无自动保存或网络发送。", "Visible indicator and Cancel button; higher-integrity, wrong-architecture, and protected targets are rejected. No automatic saving or network transmission."));
+            ui.small(self.tr("限制：512 行 × 32 列 / 1024 节点 / 深度 32 / 每项 2048 UTF-16 / 总计 1 MiB；所选目标最多 5 秒。", "Limits: 512 rows × 32 columns / 1024 nodes / depth 32 / 2048 UTF-16 units per item / 1 MiB total; selected targets have a 5-second limit."));
+            egui::CollapsingHeader::new(self.tr("限制与注意事项", "Limitations")).show(ui, |ui| {
+                ui.small(self.tr("菜单快照可能早于应用的菜单初始化处理，因此动态菜单项可能尚未更新。取消会结束辅助进程并移除 Hook，但不能强制中止控件已在执行的调用；挂起控件可能仍阻塞其自身线程。", "A menu snapshot may precede the application's menu-initialization handler, so dynamic items may not be updated yet. Cancellation ends the broker and removes its Hook, but cannot unwind a control call already in progress; a hung control may still block its own thread."));
+            });
+            let consent_label = if confirmation.target.is_some() { self.tr("我确认本次读取上述目标", "I approve this capture of the target above") } else { self.tr("我明确同意本次桌面范围菜单捕获", "I explicitly approve this one desktop-wide menu capture") };
+            ui.checkbox(&mut confirmation.consent,consent_label);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(confirmation.consent && ready,egui::Button::new(self.tr("开始一次读取", "Start one capture"))).clicked() { start=true; }
+                if ui.button(self.tr("取消", "Cancel")).clicked() { dismiss=true; }
+            });
+        });
+        if start {
+            self.start_hook(confirmation);
+        } else if !dismiss {
+            self.hook_confirmation = Some(confirmation);
+        }
+    }
     fn request_content(&mut self) {
         let kind = match self.detail_tab {
             3 | 4 => DetailKind::Legacy(self.legacy_frame),
@@ -1582,12 +1932,28 @@ impl CoralSpyApp {
             for (i, label) in labels.iter().enumerate() {
                 if ui.selectable_label(self.detail_tab == i, *label).clicked() {
                     self.detail_tab = i;
+                    self.hook_confirmation = None;
                     self.tree_expanded = true;
                     self.rebuild_rows();
                 }
             }
         });
         ui.separator();
+        if let Some(cancel) = &self.hook_cancel {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                if ui
+                    .add_enabled(
+                        !cancel.load(Ordering::Acquire),
+                        egui::Button::new(self.tr("取消 Hook", "Cancel Hook")),
+                    )
+                    .clicked()
+                {
+                    cancel.store(true, Ordering::Release);
+                }
+                ui.small(self.tr("一次性捕获正在进行", "One-shot capture in progress"));
+            });
+        }
         if self.detail_tab == 7 {
             self.about_contents(ui);
             return;
@@ -1595,8 +1961,8 @@ impl CoralSpyApp {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
-                    self.selected.is_some() && !self.reading_details,
-                    egui::Button::new(self.tr("读取详情", "Read details")),
+                    self.selected.is_some() && !self.reading_details && self.hook_cancel.is_none(),
+                    egui::Button::new(self.tr("API 读取", "Read via API")),
                 )
                 .clicked()
             {
@@ -1613,6 +1979,7 @@ impl CoralSpyApp {
                 ui.spinner();
             }
         });
+        self.hook_controls(ui);
         if !self.content_warning.is_empty() {
             ui.label(
                 RichText::new(&self.content_warning)
@@ -1670,14 +2037,24 @@ impl CoralSpyApp {
             3 => self.ie_contents(ui, false),
             4 => self.ie_contents(ui, true),
             5 => {
-                ui.small(self.tr("导出为文本 RTF；不保留原控件样式或嵌入对象。","Exports text-only RTF; original styling and embedded objects are not preserved."));
-                let mut text = self.content_text.as_str();
-                ui.add(
-                    egui::TextEdit::multiline(&mut text)
-                        .desired_rows(18)
-                        .desired_width(f32::INFINITY),
-                );
-                self.content_actions(ui);
+                let has_raw = self
+                    .hook_result
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.applies_to(5));
+                ui.small(if has_raw {
+                    self.tr("Hook 原始流：保存原始 RTF 可保留控件提供的格式。此处不将原始字节伪装成纯文本预览。", "Hook raw stream: Save original RTF preserves the format supplied by the control. Raw bytes are not shown as a plain-text preview.")
+                } else {
+                    self.tr("API / UI Automation 纯文本预览。文本 RTF 导出不保留原格式；使用 Hook 可读取原始 RTF。", "API / UI Automation plain-text preview. Text-only RTF export loses formatting; use Hook for original RTF.")
+                });
+                if !has_raw {
+                    let mut text = self.content_text.as_str();
+                    ui.add(
+                        egui::TextEdit::multiline(&mut text)
+                            .desired_rows(18)
+                            .desired_width(f32::INFINITY),
+                    );
+                    self.content_actions(ui);
+                }
             }
             6 => {
                 self.content_table(ui, true);
@@ -1685,19 +2062,62 @@ impl CoralSpyApp {
             _ => {}
         }
     }
+    fn content_export_available(&self) -> bool {
+        !self.content_text.is_empty()
+            || self.hook_result.as_ref().is_some_and(|snapshot| {
+                snapshot.applies_to(self.detail_tab)
+                    && !matches!(snapshot.result.data, CaptureData::RichEditRtf { .. })
+            })
+    }
+    fn content_export_text(&self) -> String {
+        self.hook_result
+            .as_ref()
+            .filter(|snapshot| snapshot.applies_to(self.detail_tab))
+            .map(|snapshot| snapshot.export_report(self.english))
+            .unwrap_or_else(|| self.content_text.clone())
+    }
+    fn current_content_row(&self) -> Option<String> {
+        let index = self.selected_row?;
+        if let Some(snapshot) = self
+            .hook_result
+            .as_ref()
+            .filter(|snapshot| snapshot.applies_to(self.detail_tab))
+        {
+            return snapshot.row_report(index, self.english);
+        }
+        self.content_rows
+            .get(index)
+            .map(|row| format!("{}\t{}\t{}", row.1, row.2, row.3))
+    }
     fn content_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button(self.tr("复制全部", "Copy all")).clicked() {
-                ui.ctx().copy_text(self.content_text.clone());
+            if ui
+                .add_enabled(
+                    self.content_export_available(),
+                    egui::Button::new(self.tr("复制全部", "Copy all")),
+                )
+                .clicked()
+            {
+                ui.ctx().copy_text(self.content_export_text());
             }
-            if ui.button(self.tr("保存全部", "Save all")).clicked() {
+            if ui
+                .add_enabled(
+                    self.content_export_available() && !self.exporting,
+                    egui::Button::new(if self.detail_tab == 5 {
+                        self.tr("保存文本 RTF", "Save text-only RTF")
+                    } else {
+                        self.tr("保存全部", "Save all")
+                    }),
+                )
+                .clicked()
+            {
                 if self.detail_tab == 5 {
                     self.save_named(
                         coralspynext::formats::text_to_rtf(&self.content_text),
                         "rtf",
                     );
                 } else {
-                    self.save_string(self.content_text.clone());
+                    self.save_string(self.content_export_text());
                 }
             }
             if ui
@@ -1707,9 +2127,8 @@ impl CoralSpyApp {
                 )
                 .clicked()
             {
-                if let Some(row) = self.selected_row.and_then(|i| self.content_rows.get(i)) {
-                    ui.ctx()
-                        .copy_text(format!("{}\t{}\t{}", row.1, row.2, row.3));
+                if let Some(row) = self.current_content_row() {
+                    ui.ctx().copy_text(row);
                 }
             }
             if ui
@@ -1719,8 +2138,8 @@ impl CoralSpyApp {
                 )
                 .clicked()
             {
-                if let Some(row) = self.selected_row.and_then(|i| self.content_rows.get(i)) {
-                    self.save_string(format!("{}\t{}\t{}", row.1, row.2, row.3));
+                if let Some(row) = self.current_content_row() {
+                    self.save_string(row);
                 }
             }
         });
@@ -1737,15 +2156,27 @@ impl CoralSpyApp {
             .show(ui, |ui| {
                 if self.detail_tab == 1 {
                     let headers = self
-                        .content_snapshot
+                        .hook_result
                         .as_ref()
-                        .map(coralspynext::content_view::list_headers)
-                        .unwrap_or_default();
+                        .filter(|snapshot| snapshot.applies_to(1))
+                        .map(|snapshot| snapshot.list_headers(self.english))
+                        .unwrap_or_else(|| {
+                            self.content_snapshot
+                                .as_ref()
+                                .map(coralspynext::content_view::list_headers)
+                                .unwrap_or_default()
+                        });
                     let structured_cells = self
-                        .content_snapshot
+                        .hook_result
                         .as_ref()
-                        .map(coralspynext::content_view::list_cells)
-                        .unwrap_or_default();
+                        .filter(|snapshot| snapshot.applies_to(1))
+                        .map(hook_ui::Snapshot::list_cells)
+                        .unwrap_or_else(|| {
+                            self.content_snapshot
+                                .as_ref()
+                                .map(coralspynext::content_view::list_cells)
+                                .unwrap_or_default()
+                        });
                     egui::Grid::new("listview_cells")
                         .striped(true)
                         .spacing([14.0, 5.0])
@@ -1818,7 +2249,10 @@ impl CoralSpyApp {
                     });
                 }
                 if self.content_rows.is_empty() {
-                    ui.label(self.tr("暂无数据。点击“读取详情”。", "No data. Click Read details."));
+                    ui.label(self.tr(
+                        "暂无数据。请选择 API 或 Hook 读取。",
+                        "No data. Choose an API or Hook capture.",
+                    ));
                 }
             });
     }
@@ -2338,9 +2772,36 @@ impl CoralSpyApp {
     }
 }
 
+impl Drop for CoralSpyApp {
+    fn drop(&mut self) {
+        self.clear_hook();
+    }
+}
+
 impl eframe::App for CoralSpyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && (self.hook_running_id.is_some() || self.pending_hook.is_some())
+        {
+            self.closing_after_hook = true;
+            if let Some(cancel) = &self.hook_cancel {
+                cancel.store(true, Ordering::Release);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.notify(
+                self.tr(
+                    "正在停止 Hook，完成后退出…",
+                    "Stopping the Hook capture before closing…",
+                ),
+                false,
+            );
+        }
         self.service_worker(ctx);
+        if self.closing_after_hook && self.hook_running_id.is_none() && self.pending_hook.is_none()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.service_picker(ctx);
         self.service_desktop(ctx);
         if self.picker.is_none() && ctx.input(|i| i.key_pressed(egui::Key::F5)) {
@@ -2373,6 +2834,74 @@ impl eframe::App for CoralSpyApp {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
     }
+}
+
+fn capture_hook(
+    mut request: CaptureRequest,
+    expected: Option<WindowInfo>,
+    cancel: &AtomicBool,
+) -> Result<hook_ui::Snapshot, CaptureError> {
+    let mismatch = || {
+        CaptureError::new(
+            ErrorCode::TargetMismatch,
+            "Selected HWND/PID/TID/class identity changed",
+        )
+    };
+    if cancel.load(Ordering::Acquire) {
+        return Err(CaptureError::new(
+            ErrorCode::Cancelled,
+            "Capture cancelled before launch",
+        ));
+    }
+    if let Some(info) = &expected {
+        if platform::window_identity(info.hwnd).map_err(|_| mismatch())?
+            != (info.pid, info.class_name.clone())
+        {
+            return Err(mismatch());
+        }
+        let target = Target {
+            hwnd: info.hwnd,
+            pid: info.pid,
+            tid: info.tid,
+        };
+        if request.target != Some(target) {
+            return Err(mismatch());
+        }
+        request.architecture = hook::target_architecture(target)?;
+    }
+    let operation = request.operation;
+    let architecture = request.architecture;
+    let result = hook::capture(request, cancel)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err(CaptureError::new(
+            ErrorCode::Cancelled,
+            "Capture cancelled; result discarded",
+        ));
+    }
+    if let Some(info) = &expected {
+        if result.actual_target
+            != (Target {
+                hwnd: info.hwnd,
+                pid: info.pid,
+                tid: info.tid,
+            })
+        {
+            return Err(mismatch());
+        }
+    }
+    let source = expected.or_else(|| {
+        platform::inspect_window(result.actual_target.hwnd)
+            .ok()
+            .filter(|info| {
+                info.pid == result.actual_target.pid && info.tid == result.actual_target.tid
+            })
+    });
+    Ok(hook_ui::Snapshot {
+        operation,
+        architecture,
+        result,
+        source,
+    })
 }
 
 fn readonly_row(ui: &mut egui::Ui, label: &str, value: &str, multiline: bool, width: f32) {
