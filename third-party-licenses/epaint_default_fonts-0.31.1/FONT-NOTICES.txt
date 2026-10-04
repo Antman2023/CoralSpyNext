@@ -1,0 +1,114 @@
+Font notices extracted verbatim from the bundled fonts in epaint_default_fonts 0.31.1.
+Source fonts match emilk/egui commit 1669e52a7ccfc3489c1b0999b9ed48894a0b3887.
+The accompanying .txt files contain the complete font license texts.
+
+=== Hack-Regular.ttf ===
+Source: https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Hack-Regular.ttf
+Git blob SHA-1: 92a90cb06e0535afa79f6cba26ceece15a7f7959
+SHA-256: 15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125
+
+Copyright (name table ID 0):
+Copyright (c) 2018 Source Foundry Authors / Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
+
+Manufacturer (name table ID 8):
+Source Foundry
+
+Designer (name table ID 9):
+Source Foundry Authors
+
+License description (name table ID 13):
+The work in the Hack project is Copyright 2018 Source Foundry Authors and licensed under the MIT License
+
+The work in the DejaVu project was committed to the public domain.
+
+Bitstream Vera Sans Mono Copyright 2003 Bitstream Inc. and licensed under the Bitstream Vera License with Reserved Font Names "Bitstream" and "Vera"
+
+MIT License
+
+Copyright (c) 2018 Source Foundry Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+BITSTREAM VERA LICENSE
+
+Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream Vera is a trademark of Bitstream, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of the fonts accompanying this license ("Fonts") and associated documentation files (the "Font Software"), to reproduce and distribute the Font Software, including without limitation the rights to use, copy, merge, publish, distribute, and/or sell copies of the Font Software, and to permit persons to whom the Font Software is furnished to do so, subject to the following conditions:
+
+The above copyright and trademark notices and this permission notice shall be included in all copies of one or more of the Font Software typefaces.
+
+The Font Software may be modified, altered, or added to, and in particular the designs of glyphs or characters in the Fonts may be modified and additional glyphs or characters may be added to the Fonts, only if the fonts are renamed to names not containing either the words "Bitstream" or the word "Vera".
+
+This License becomes null and void to the extent applicable to Fonts or Font Software that has been modified and is distributed under the "Bitstream Vera" names.
+
+The Font Software may be sold as part of a larger software package but no copy of one or more of the Font Software typefaces may be sold by itself.
+
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL BITSTREAM OR THE GNOME FOUNDATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.
+
+Except as contained in this notice, the names of Gnome, the Gnome Foundation, and Bitstream Inc., shall not be used in advertising or otherwise to promote the sale, use or other dealings in this Font Software without prior written authorization from the Gnome Foundation or Bitstream Inc., respectively. For further information, contact: fonts at gnome dot org.
+
+License URL (name table ID 14):
+https://github.com/source-foundry/Hack/blob/master/LICENSE.md
+
+=== NotoEmoji-Regular.ttf ===
+Source: https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/NotoEmoji-Regular.ttf
+Git blob SHA-1: 19b7badf4afe64dae28cd64fc506b95291bb8b03
+SHA-256: 415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5
+
+Copyright (name table ID 0):
+Copyright 2013 Google Inc. All Rights Reserved.
+
+Trademark (name table ID 7):
+Noto is a trademark of Google Inc.
+
+Manufacturer (name table ID 8):
+Monotype Imaging Inc.
+
+Designer (name table ID 9):
+Monotype Design Team
+
+License description (name table ID 13):
+This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+
+License URL (name table ID 14):
+http://scripts.sil.org/OFL
+
+=== Ubuntu-Light.ttf ===
+Source: https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Ubuntu-Light.ttf
+Git blob SHA-1: 0e9f90d7cb13b3c816150ceae52bce1c91375e11
+SHA-256: 80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70
+
+Copyright (name table ID 0):
+Copyright 2011 Canonical Ltd.  Licensed under the Ubuntu Font Licence 1.0
+
+Trademark (name table ID 7):
+Ubuntu and Canonical are registered trademarks of Canonical Ltd.
+
+Manufacturer (name table ID 8):
+Dalton Maag Ltd
+
+Designer (name table ID 9):
+Dalton Maag Ltd
+
+=== emoji-icon-font.ttf ===
+Source: https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/emoji-icon-font.ttf
+Git blob SHA-1: 806408328a74c59c8e728eeb0d4fa9ed4c84bd2f
+SHA-256: 3a706840d2f888b83c184f7d41900dbaa0151a806c4d130cc88539d53fedef0a
+
+No copyright/license name-table records; see emoji-icon-font-mit-license.txt.

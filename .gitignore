@@ -5,3 +5,5 @@
 *.pdb
 *.dll
 .env
+__pycache__/
+*.pyc

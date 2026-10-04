@@ -1,4 +1,4 @@
-# 0.3.0 逐项对应状态
+# 0.3.1 逐项对应状态
 
 基于原版静态窗体资源恢复的89个入口，编号与 `ORIGINAL_FEATURE_INVENTORY.md` 一致。另对原版三个Hook DLL及List/Tree读取调用做静态检查。本表是源码路径与静态审查状态，**全部仍待 Windows 11 实机验收**。
 
@@ -43,4 +43,4 @@
 
 ## 验证记录
 
-具体执行命令、测试数量、构建架构、SHA-256以包内 `BUILD-INFO.json`、`TESTING.md` 与 [Hook验证记录](../hook-engine/docs/verification.md) 为准。未启用GitHub Windows runner；`ci/windows.yml.example`只是一份非活动模板。
+具体执行命令、测试数量、构建架构、SHA-256以包内 `BUILD-INFO.json`、`TESTING.md` 与 [Hook验证记录](../hook-engine/docs/verification.md) 为准。`.github/workflows/release.yml`提供Windows runner自有控件验证；是否通过以对应提交的实际运行结果为准。旧包记录不追溯改写。

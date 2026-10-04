@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <title>CoralSpyNext application icon</title>
+  <desc>Original window and coral inspection reticle artwork, licensed under the project MIT license.</desc>
+  <!-- Whole-pixel geometry keeps the compact window silhouette clear at 16 px. -->
+  <rect x="2" y="4" width="26" height="24" rx="2" fill="#f4f7fb" stroke="#355074" stroke-width="2"/>
+  <path d="M4 4h22a2 2 0 0 1 2 2v5H2V6a2 2 0 0 1 2-2Z" fill="#577eb5"/>
+  <path d="M2 11h26" stroke="#355074" stroke-width="2"/>
+  <path d="M6 7h8" stroke="#edf4ff" stroke-width="2"/>
+  <path d="M23 7h2" stroke="#edf4ff" stroke-width="2"/>
+  <path d="M6 16h7M6 20h4M6 24h5" stroke="#8090a5" stroke-width="2"/>
+  <!-- The open center leaves the inspected window visible through the reticle. -->
+  <circle cx="22" cy="22" r="6" fill="#fffaf6" stroke="#d85d49" stroke-width="2"/>
+  <path d="M22 13v5m0 8v5M13 22h5m8 0h5" stroke="#d85d49" stroke-width="2"/>
+  <rect x="21" y="21" width="2" height="2" fill="#355074"/>
+</svg>

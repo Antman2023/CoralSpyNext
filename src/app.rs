@@ -2719,6 +2719,7 @@ impl CoralSpyApp {
                 egui::ViewportId::from_hash_of("details"),
                 egui::ViewportBuilder::default()
                     .with_title(self.tr("查看详情", "View details"))
+                    .with_icon(app_icon())
                     .with_inner_size([510.0, 460.0])
                     .with_min_inner_size([490.0, 380.0]),
                 |ctx, _| {
@@ -2738,6 +2739,7 @@ impl CoralSpyApp {
                 egui::ViewportId::from_hash_of("colors"),
                 egui::ViewportBuilder::default()
                     .with_title(self.tr("颜色拾取器", "Color picker"))
+                    .with_icon(app_icon())
                     .with_inner_size([620.0, 66.0])
                     .with_min_inner_size([620.0, 66.0])
                     .with_resizable(false),
@@ -2755,6 +2757,7 @@ impl CoralSpyApp {
                 egui::ViewportId::from_hash_of("options"),
                 egui::ViewportBuilder::default()
                     .with_title(self.tr("选项", "Options"))
+                    .with_icon(app_icon())
                     .with_inner_size([420.0, 350.0])
                     .with_resizable(false),
                 |ctx, _| {
@@ -3207,35 +3210,16 @@ fn full_report(info: &WindowInfo, english: bool) -> String {
     }
 }
 
-pub fn app_icon() -> egui::IconData {
-    let size = 64usize;
-    let mut rgba = vec![0; size * size * 4];
-    for y in 0..size {
-        for x in 0..size {
-            let dx = (x as i32 - 32).abs();
-            let dy = (y as i32 - 32).abs();
-            let inside = dx < 30
-                && dy < 30
-                && (dx < 20 || dy < 20 || (dx - 20).pow(2) + (dy - 20).pow(2) < 100);
-            if !inside {
-                continue;
-            }
-            let ink = ((17..23).contains(&x) && (17..47).contains(&y))
-                || ((17..47).contains(&x) && ((17..23).contains(&y) || (41..47).contains(&y)))
-                || ((x as i32 - 44).pow(2) + (y as i32 - 32).pow(2) < 17);
-            let pixel = if ink {
-                [50, 29, 29, 255]
-            } else {
-                [248, 139, 113, 255]
-            };
-            rgba[(y * size + x) * 4..(y * size + x) * 4 + 4].copy_from_slice(&pixel);
-        }
-    }
-    egui::IconData {
-        rgba,
-        width: size as u32,
-        height: size as u32,
-    }
+pub fn app_icon() -> Arc<egui::IconData> {
+    // Reuse the exact 256px frame packaged in the executable's ICON resource.
+    // Auxiliary viewports rebuild their options each frame, so decode only once.
+    static ICON: std::sync::OnceLock<Arc<egui::IconData>> = std::sync::OnceLock::new();
+    Arc::clone(ICON.get_or_init(|| {
+        Arc::new(
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/coralspynext.png"))
+                .expect("checked-in CoralSpyNext icon must be a valid RGBA PNG"),
+        )
+    }))
 }
 fn key_name(key: u32) -> String {
     match key {
@@ -3262,6 +3246,21 @@ fn classic_icon_slots(icons: &[IconImage]) -> [Option<usize>; 4] {
 #[cfg(test)]
 mod classic_icon_tests {
     use super::*;
+    #[test]
+    fn application_icon_decodes_once_and_preserves_transparency() {
+        let icon = app_icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        assert_eq!(icon.rgba[3], 0, "transparent top-left corner");
+        assert!(icon
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] == 255));
+        assert!(Arc::ptr_eq(&icon, &app_icon()));
+    }
+
     fn icon(kind: &str) -> IconImage {
         IconImage {
             kind: kind.into(),

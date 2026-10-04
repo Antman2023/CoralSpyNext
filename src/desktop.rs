@@ -149,16 +149,17 @@ mod native {
                 NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
             },
             WindowsAndMessaging::{
-                AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-                DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, EndMenu, GetCursorPos,
-                GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow,
-                KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+                AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+                DestroyMenu, DestroyWindow, DispatchMessageW, EndMenu, GetCursorPos, GetMessageW,
+                GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, KillTimer,
+                LoadImageW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
                 SetForegroundWindow, SetMenuDefaultItem, SetTimer, SetWindowLongPtrW,
                 ShowWindowAsync, TrackPopupMenu, TranslateMessage, UnregisterClassW, CREATESTRUCTW,
-                GWLP_USERDATA, HICON, MF_SEPARATOR, MF_STRING, MSG, SW_RESTORE, SW_SHOW,
-                TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
-                WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_NCDESTROY,
-                WM_NULL, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+                GWLP_USERDATA, HICON, IMAGE_ICON, MF_SEPARATOR, MF_STRING, MSG, SW_RESTORE,
+                SW_SHOW, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE,
+                WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDBLCLK,
+                WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW,
+                WS_POPUP,
             },
         },
     };
@@ -735,7 +736,7 @@ mod native {
     struct OwnedIcon(HICON);
     impl Drop for OwnedIcon {
         fn drop(&mut self) {
-            // SAFETY: Created by CreateIcon, never a borrowed/shared stock icon.
+            // SAFETY: LoadImageW is called without LR_SHARED, so this icon is owned.
             unsafe {
                 DestroyIcon(self.0);
             }
@@ -743,30 +744,10 @@ mod native {
     }
 
     fn create_coral_icon(module: HINSTANCE) -> Result<OwnedIcon, String> {
-        let mut mask = [0xff_u8; 128]; // 32 rows, DWORD-aligned 1-bit AND mask.
-        let mut pixels = [0_u8; 32 * 32 * 4]; // BGRA pixels, opaque colored circle.
-        for y in 0..32_i32 {
-            for x in 0..32_i32 {
-                let dx = 2 * x - 31;
-                let dy = 2 * y - 31;
-                let distance = dx * dx + dy * dy;
-                if distance <= 29 * 29 {
-                    let index = (y as usize * 32 + x as usize) * 4;
-                    mask[y as usize * 4 + x as usize / 8] &= !(0x80 >> (x as usize % 8));
-                    let letter =
-                        (12 * 12..=21 * 21).contains(&distance) && (dx < 6 || dy.abs() > 12);
-                    let color = if letter {
-                        [255, 255, 255, 255]
-                    } else {
-                        [90, 105, 245, 255]
-                    };
-                    pixels[index..index + 4].copy_from_slice(&color);
-                }
-            }
-        }
-        // SAFETY: Both buffers have the required dimensions/bit depth and remain
-        // alive until CreateIcon copies them; the returned icon is independently owned.
-        let icon = unsafe { CreateIcon(module, 32, 32, 1, 32, mask.as_ptr(), pixels.as_ptr()) };
+        // Resource 101 is the same multi-size application icon used by Explorer.
+        // SAFETY: The module is live and MAKEINTRESOURCE-style integer 101 names
+        // our checked-in ICON resource. Without LR_SHARED, DestroyIcon owns cleanup.
+        let icon = unsafe { LoadImageW(module, 101_usize as *const u16, IMAGE_ICON, 32, 32, 0) };
         if icon.is_null() {
             Err(last_error(crate::locale::label(
                 "创建托盘图标失败",

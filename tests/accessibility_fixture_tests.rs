@@ -199,8 +199,17 @@ impl Drop for Fixture {
 
 fn worker(hwnd: u64) -> Result<ContentSnapshot, String> {
     // Calling accessibility::inspect here would re-launch the test harness;
-    // explicitly use Cargo's application executable so its dispatcher is tested.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_coralspynext"))
+    // explicitly use the application executable so its dispatcher is tested.
+    // CI may relocate the test executable from a cross-compilation machine.
+    // This override exists only in this test, never in the shipped application.
+    let application = std::env::var_os("CORALSPY_TEST_APP")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_coralspynext").into());
+    assert!(
+        application.is_absolute() && application.is_file(),
+        "CORALSPY_TEST_APP must identify the absolute path of the source-built application"
+    );
+    let mut child = Command::new(application)
         .args(["--accessibility-worker", &hwnd.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

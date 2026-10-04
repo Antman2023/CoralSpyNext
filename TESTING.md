@@ -1,4 +1,4 @@
-# 验证与验收范围（0.3.0）
+# 验证与验收范围（0.3.1）
 
 ## 已执行的本地检查
 
@@ -21,7 +21,7 @@ Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查�
 - 托盘服务根窗绑定参数、事件入队与回调顺序
 - 历史网页纯辅助函数：保护字段、URL/资源分类、输入上限等
 
-这些 Windows 测试尚未在 Windows 11 执行。不得把 Linux 测试的 `0 Windows tests` 当成 fixture 成功。Windows 托管 runner 也未启用：当前 GitHub 凭据无 workflow 写入权限，只提供 `ci/windows.yml.example`。
+这些 Windows 测试尚未在 Windows 11 执行。不得把 Linux 测试的 `0 Windows tests` 当成 fixture 成功。新增 GitHub Actions Windows runner 验证路径，实际是否通过须查看对应提交的运行记录；先前 0.3.0 包未执行原生 Windows 测试。
 
 ## 新增Hook自有控件验收（已编译，未运行）
 
@@ -56,4 +56,4 @@ Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查�
 
 ## 尚不能证明的部分
 
-当前没有可用的真实 Windows 11 桌面验证环境。没有对所有 UIA 提供程序、MSHTML宿主、受保护应用、磁盘过滤驱动、显卡和字体组合做运行验收。静态审查和交叉构建不能证明“完美复刻”。局部资源读取存在合作式预算，某些本地系统调用仍可能超过预算；文档如实说明。
+当前没有可用的真实 Windows 11 交互桌面验证环境。GitHub Windows Server 2022 runner 上执行的自有控件测试只覆盖报告中的具体断言。没有对所有 UIA 提供程序、MSHTML宿主、受保护应用、磁盘过滤驱动、显卡和字体组合做运行验收。静态审查和交叉构建不能证明“完美复刻”。局部资源读取存在合作式预算，某些本地系统调用仍可能超过预算；文档如实说明。

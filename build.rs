@@ -24,6 +24,8 @@ fn main() {
     println!("cargo:rustc-env=BUILD_UTC={stamp}");
     println!("cargo:rerun-if-changed=assets/app.rc");
     println!("cargo:rerun-if-changed=assets/app.manifest");
+    println!("cargo:rerun-if-changed=assets/coralspynext.ico");
+    println!("cargo:rerun-if-changed=assets/coralspynext.png");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         embed_resource::compile("assets/app.rc", embed_resource::NONE)
             .manifest_required()

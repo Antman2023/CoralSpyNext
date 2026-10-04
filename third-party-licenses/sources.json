@@ -1,0 +1,269 @@
+[
+  {
+    "destination": "clipboard-win-5.4.1/LICENSE",
+    "repository": "DoumanAsh/clipboard-win",
+    "commit": "3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342",
+    "upstream_path": "LICENSE",
+    "source_url": "https://github.com/DoumanAsh/clipboard-win/blob/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
+    "git_blob_sha1": "36b7cd93cdfbac762f5be4c6ce276df2ea6305c2",
+    "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+  },
+  {
+    "destination": "egui-0.31.1/LICENSE-MIT",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "LICENSE-MIT",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/LICENSE-MIT",
+    "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+    "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "destination": "egui-0.31.1/LICENSE-APACHE",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "LICENSE-APACHE",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/LICENSE-APACHE",
+    "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+    "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+  },
+  {
+    "destination": "profiling-1.0.18/LICENSE-MIT",
+    "repository": "aclysma/profiling",
+    "commit": "8271551172eb6fa4cba47369aedd93790c623df9",
+    "upstream_path": "LICENSE-MIT",
+    "source_url": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "git_blob_sha1": "6a84e059ad8b43e03c2b06bc2af4dc1d8442808d",
+    "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+  },
+  {
+    "destination": "profiling-1.0.18/LICENSE-APACHE",
+    "repository": "aclysma/profiling",
+    "commit": "8271551172eb6fa4cba47369aedd93790c623df9",
+    "upstream_path": "LICENSE-APACHE",
+    "source_url": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+    "git_blob_sha1": "139dce95d473c201a8561ef17536314d8b8cda65",
+    "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"
+  },
+  {
+    "destination": "gl_generator-0.14.0/LICENSE",
+    "repository": "rust-windowing/gl-rs",
+    "commit": "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+    "upstream_path": "LICENSE",
+    "source_url": "https://github.com/rust-windowing/gl-rs/blob/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+    "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "destination": "khronos_api-3.1.0/LICENSE",
+    "repository": "rust-windowing/gl-rs",
+    "commit": "f150967b1c44ae888e6676f93f639ebc82771bdc",
+    "upstream_path": "LICENSE",
+    "source_url": "https://github.com/rust-windowing/gl-rs/blob/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+    "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "destination": "winapi-x86_64-pc-windows-gnu-0.4.0/LICENSE-MIT",
+    "repository": "retep998/winapi-rs",
+    "commit": "9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa",
+    "upstream_path": "LICENSE-MIT",
+    "source_url": "https://github.com/retep998/winapi-rs/blob/9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa/LICENSE-MIT",
+    "git_blob_sha1": "796e929aa550bcf4840b199500b7c5bf96edcb75",
+    "sha256": "5b19674a1db628a475850a131956ed49521b744e3dda8f5a94141f9aba681219"
+  },
+  {
+    "destination": "winapi-x86_64-pc-windows-gnu-0.4.0/LICENSE-APACHE",
+    "repository": "retep998/winapi-rs",
+    "commit": "9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa",
+    "upstream_path": "LICENSE-APACHE",
+    "source_url": "https://github.com/retep998/winapi-rs/blob/9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa/LICENSE-APACHE",
+    "git_blob_sha1": "8dada3edaf50dbc082c9a125058f25def75e625a",
+    "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+  },
+  {
+    "destination": "epaint_default_fonts-0.31.1/Hack-Regular.txt",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "crates/epaint_default_fonts/fonts/Hack-Regular.txt",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Hack-Regular.txt",
+    "git_blob_sha1": "b0ec74488ab8a68acc95060414c7790a44a27172",
+    "sha256": "47c0cccbeec7e8614548cc485588b28149e7874188df5f41b36efebcee285c87"
+  },
+  {
+    "destination": "epaint_default_fonts-0.31.1/OFL.txt",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "crates/epaint_default_fonts/fonts/OFL.txt",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/OFL.txt",
+    "git_blob_sha1": "d952d62c065f3f35fb83a173496e90b21525aef3",
+    "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+  },
+  {
+    "destination": "epaint_default_fonts-0.31.1/UFL.txt",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "crates/epaint_default_fonts/fonts/UFL.txt",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/UFL.txt",
+    "git_blob_sha1": "ae78a8f94eae372cb1ca4e14b67244342fce604e",
+    "sha256": "2f0015108d68627bd788d313f529c21ff4da2c2c42a5e1f3883acc83480f9002"
+  },
+  {
+    "destination": "epaint_default_fonts-0.31.1/emoji-icon-font-mit-license.txt",
+    "repository": "emilk/egui",
+    "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+    "upstream_path": "crates/epaint_default_fonts/fonts/emoji-icon-font-mit-license.txt",
+    "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/emoji-icon-font-mit-license.txt",
+    "git_blob_sha1": "99016e120b21a6c77e3388d415968eaf6b504b4a",
+    "sha256": "b9d2c1d909aa149996fd4c91dcb92b2362a04431640c1d200959da94caf8cde1"
+  },
+  {
+    "destination": "khronos_api-3.1.0/ANGLE-LICENSE",
+    "repository": "google/angle",
+    "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+    "upstream_path": "LICENSE",
+    "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/LICENSE",
+    "git_blob_sha1": "0f65fd60fd68d465a2283378849f16532f5ee4f1",
+    "sha256": "bf4da21bd20bcfb5b60b7ecc67fa864a79be049e21d6178076887f178dd6c71a"
+  },
+  {
+    "destination": "khronos_api-3.1.0/REGISTRY-NOTICES.txt",
+    "extraction": "Copyright/license XML comments or initial IDL comment header, verbatim; full source file git blob SHA-1 verified before extraction.",
+    "source_files": [
+      {
+        "local_path": "api/xml/gl.xml",
+        "repository": "KhronosGroup/OpenGL-Registry",
+        "commit": "85d924a5165e7206f4c73c8c10307658dc2bbe10",
+        "upstream_path": "xml/gl.xml",
+        "source_url": "https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/gl.xml",
+        "source_git_blob_sha1": "324b11716c2b1ac88f7bc4f2322a8c76c7f8ac23",
+        "source_sha256": "7dae830ddacefd2af92aef2b438ff89f90fb5496f596dec8282b212eb4fc51e3"
+      },
+      {
+        "local_path": "api/xml/glx.xml",
+        "repository": "KhronosGroup/OpenGL-Registry",
+        "commit": "85d924a5165e7206f4c73c8c10307658dc2bbe10",
+        "upstream_path": "xml/glx.xml",
+        "source_url": "https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/glx.xml",
+        "source_git_blob_sha1": "f9035767bd129cedb19ecaf7981f97daed535703",
+        "source_sha256": "338cee03c97e78aa167dd667407ab973f4bc656c58cf9002aa54fa78b2f9ff32"
+      },
+      {
+        "local_path": "api/xml/wgl.xml",
+        "repository": "KhronosGroup/OpenGL-Registry",
+        "commit": "85d924a5165e7206f4c73c8c10307658dc2bbe10",
+        "upstream_path": "xml/wgl.xml",
+        "source_url": "https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/wgl.xml",
+        "source_git_blob_sha1": "49277ed4649ab2d38d3d8fc3e528532143e9c2fa",
+        "source_sha256": "41e0a2182217b099b1628757956cb103cea9660e830f4d2f9fa07bf3a3679feb"
+      },
+      {
+        "local_path": "api_angle/scripts/egl.xml",
+        "repository": "google/angle",
+        "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+        "upstream_path": "scripts/egl.xml",
+        "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/egl.xml",
+        "source_git_blob_sha1": "ab0a6518b7fe227a13be216f083dea19dc29ddca",
+        "source_sha256": "523fc17745545daca85c5b107b4a4c1a23dd3de39f70e499c77249e3dd6569ec"
+      },
+      {
+        "local_path": "api_angle/scripts/egl_angle_ext.xml",
+        "repository": "google/angle",
+        "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+        "upstream_path": "scripts/egl_angle_ext.xml",
+        "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/egl_angle_ext.xml",
+        "source_git_blob_sha1": "e1029bd0035bda38039545842323955fbcde3bf8",
+        "source_sha256": "98c60fa9fe46f50dd4e101c2262b4293adeeae48a18c39ad63dc085e639b6096"
+      },
+      {
+        "local_path": "api_angle/scripts/gl.xml",
+        "repository": "google/angle",
+        "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+        "upstream_path": "scripts/gl.xml",
+        "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/gl.xml",
+        "source_git_blob_sha1": "3466dd7061b6e7ebc0809bfe635ea541ed8f9c00",
+        "source_sha256": "baac3f2e27b4949773f4ee2e6ed8e43a2ae96a428b9d73ae9d1e9c0c404cae1f"
+      },
+      {
+        "local_path": "api_angle/scripts/gl_angle_ext.xml",
+        "repository": "google/angle",
+        "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+        "upstream_path": "scripts/gl_angle_ext.xml",
+        "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/gl_angle_ext.xml",
+        "source_git_blob_sha1": "121ec91966ef6a5ce9d9a92e4e82961ab22ba404",
+        "source_sha256": "dcf1ca2ce9536bd2ea6cab6e93ce0a37821793a9ed12f280f005a3459e2905e8"
+      },
+      {
+        "local_path": "api_angle/scripts/wgl.xml",
+        "repository": "google/angle",
+        "commit": "7403dd2cd3764fe96660fe09892e764e9ae1dbca",
+        "upstream_path": "scripts/wgl.xml",
+        "source_url": "https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/wgl.xml",
+        "source_git_blob_sha1": "49277ed4649ab2d38d3d8fc3e528532143e9c2fa",
+        "source_sha256": "41e0a2182217b099b1628757956cb103cea9660e830f4d2f9fa07bf3a3679feb"
+      },
+      {
+        "local_path": "api_egl/api/egl.xml",
+        "repository": "KhronosGroup/EGL-Registry",
+        "commit": "b6b558e7042d67fc7543383bb0e13a075f21d8ab",
+        "upstream_path": "api/egl.xml",
+        "source_url": "https://github.com/KhronosGroup/EGL-Registry/blob/b6b558e7042d67fc7543383bb0e13a075f21d8ab/api/egl.xml",
+        "source_git_blob_sha1": "ab0a6518b7fe227a13be216f083dea19dc29ddca",
+        "source_sha256": "523fc17745545daca85c5b107b4a4c1a23dd3de39f70e499c77249e3dd6569ec"
+      },
+      {
+        "local_path": "api_webgl/specs/latest/1.0/webgl.idl",
+        "repository": "KhronosGroup/WebGL",
+        "commit": "c987f075bfdca44119175c41f547d849c08983a3",
+        "upstream_path": "specs/latest/1.0/webgl.idl",
+        "source_url": "https://github.com/KhronosGroup/WebGL/blob/c987f075bfdca44119175c41f547d849c08983a3/specs/latest/1.0/webgl.idl",
+        "source_git_blob_sha1": "826dfff0c58e9307be669a1890eedcc1a521ac63",
+        "source_sha256": "9bd8707845fb68ff349f95b320582160423ee4cdf47294cbd980933b3b25dae9"
+      },
+      {
+        "local_path": "api_webgl/specs/latest/2.0/webgl2.idl",
+        "repository": "KhronosGroup/WebGL",
+        "commit": "c987f075bfdca44119175c41f547d849c08983a3",
+        "upstream_path": "specs/latest/2.0/webgl2.idl",
+        "source_url": "https://github.com/KhronosGroup/WebGL/blob/c987f075bfdca44119175c41f547d849c08983a3/specs/latest/2.0/webgl2.idl",
+        "source_git_blob_sha1": "8c565276dec052684f19cda7b0a37e4867a84bed",
+        "source_sha256": "4e9ba68c298e76e85f312f86d474975da4ce656e35c2ad4a8c706437d50253a1"
+      }
+    ],
+    "sha256": "b9b9f4658c4e16ef04bb0cf9f6594044ac63f00923340f68ea65fbb08b70c0ee"
+  },
+  {
+    "destination": "epaint_default_fonts-0.31.1/FONT-NOTICES.txt",
+    "extraction": "Distinct TrueType name-table records with name IDs 0, 7, 8, 9, 13, and 14, decoded with fontTools; source font git blob SHA-1 verified before extraction.",
+    "source_files": [
+      {
+        "repository": "emilk/egui",
+        "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+        "upstream_path": "crates/epaint_default_fonts/fonts/Hack-Regular.ttf",
+        "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Hack-Regular.ttf",
+        "source_git_blob_sha1": "92a90cb06e0535afa79f6cba26ceece15a7f7959"
+      },
+      {
+        "repository": "emilk/egui",
+        "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+        "upstream_path": "crates/epaint_default_fonts/fonts/NotoEmoji-Regular.ttf",
+        "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/NotoEmoji-Regular.ttf",
+        "source_git_blob_sha1": "19b7badf4afe64dae28cd64fc506b95291bb8b03"
+      },
+      {
+        "repository": "emilk/egui",
+        "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+        "upstream_path": "crates/epaint_default_fonts/fonts/Ubuntu-Light.ttf",
+        "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Ubuntu-Light.ttf",
+        "source_git_blob_sha1": "0e9f90d7cb13b3c816150ceae52bce1c91375e11"
+      },
+      {
+        "repository": "emilk/egui",
+        "commit": "1669e52a7ccfc3489c1b0999b9ed48894a0b3887",
+        "upstream_path": "crates/epaint_default_fonts/fonts/emoji-icon-font.ttf",
+        "source_url": "https://github.com/emilk/egui/blob/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/emoji-icon-font.ttf",
+        "source_git_blob_sha1": "806408328a74c59c8e728eeb0d4fa9ed4c84bd2f"
+      }
+    ],
+    "sha256": "ccc69f3df3b1441e792079aa5f107c1730bf0e18a032d0fdea43b6ae755edc74"
+  }
+]

@@ -1,7 +1,8 @@
 1 24 "assets/app.manifest"
+101 ICON "assets/coralspynext.ico"
 1 VERSIONINFO
-FILEVERSION 0,3,0,0
-PRODUCTVERSION 0,3,0,0
+FILEVERSION 0,3,1,0
+PRODUCTVERSION 0,3,1,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -10,9 +11,9 @@ BEGIN
   BLOCK "040904B0"
   BEGIN
    VALUE "FileDescription", "CoralSpyNext"
-   VALUE "FileVersion", "0.3.0"
+   VALUE "FileVersion", "0.3.1"
    VALUE "ProductName", "CoralSpyNext"
-   VALUE "ProductVersion", "0.3.0"
+   VALUE "ProductVersion", "0.3.1"
    VALUE "OriginalFilename", "coralspynext.exe"
   END
  END

@@ -1,0 +1,287 @@
+Copyright and license notices from registry files bundled in khronos_api 3.1.0.
+Headers below are reproduced verbatim from the indicated upstream files.
+See LICENSE for Apache-2.0 and ANGLE-LICENSE for the ANGLE BSD-style license.
+
+=== api/xml/gl.xml ===
+Source: https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/gl.xml
+Git blob SHA-1: 324b11716c2b1ac88f7bc4f2322a8c76c7f8ac23
+
+<comment>
+Copyright (c) 2013-2018 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------
+
+This file, gl.xml, is the OpenGL and OpenGL API Registry. The canonical
+version of the registry, together with documentation, schema, and Python
+generator scripts used to generate C header files for OpenGL and OpenGL ES,
+can always be found in the Khronos Registry at
+        https://github.com/KhronosGroup/OpenGL-Registry
+    </comment>
+
+=== api/xml/glx.xml ===
+Source: https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/glx.xml
+Git blob SHA-1: f9035767bd129cedb19ecaf7981f97daed535703
+
+<comment>
+Copyright (c) 2013-2018 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------
+
+This file, glx.xml, is the GLX API Registry. The canonical version of the
+registry, together with documentation, schema, and Python generator scripts
+used to generate C header files for GLX, can always be found in the Khronos
+Registry at
+        https://github.com/KhronosGroup/OpenGL-Registry
+    </comment>
+
+=== api/xml/wgl.xml ===
+Source: https://github.com/KhronosGroup/OpenGL-Registry/blob/85d924a5165e7206f4c73c8c10307658dc2bbe10/xml/wgl.xml
+Git blob SHA-1: 49277ed4649ab2d38d3d8fc3e528532143e9c2fa
+
+<comment>
+Copyright (c) 2013-2018 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------
+
+This file, wgl.xml, is the WGL API Registry. The older ".spec" file
+format has been retired and will no longer be updated with new
+extensions and API versions. The canonical version of the registry,
+together with documentation, schema, and Python generator scripts used
+to generate C header files for WGL, can always be found in the Khronos
+Registry at
+        https://github.com/KhronosGroup/OpenGL-Registry
+    </comment>
+
+=== api_angle/scripts/egl.xml ===
+Source: https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/egl.xml
+Git blob SHA-1: ab0a6518b7fe227a13be216f083dea19dc29ddca
+
+<!--
+    Copyright (c) 2013-2017 The Khronos Group Inc.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and/or associated documentation files (the
+    "Materials"), to deal in the Materials without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Materials, and to
+    permit persons to whom the Materials are furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Materials.
+
+    THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+    -->
+
+=== api_angle/scripts/egl_angle_ext.xml ===
+Source: https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/egl_angle_ext.xml
+Git blob SHA-1: e1029bd0035bda38039545842323955fbcde3bf8
+
+<comment>
+    Copyright 2018 The ANGLE Project Authors. All rights reserved.
+    Use of this source code is governed by a BSD-style license that can be
+    found in the LICENSE file.
+
+    egl_angle_ext.xml
+        Includes data used to auto-generate ANGLE classes.
+    </comment>
+
+=== api_angle/scripts/gl.xml ===
+Source: https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/gl.xml
+Git blob SHA-1: 3466dd7061b6e7ebc0809bfe635ea541ed8f9c00
+
+<comment>
+Copyright (c) 2013-2018 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------
+
+This file, gl.xml, is the OpenGL and OpenGL API Registry. The canonical
+version of the registry, together with documentation, schema, and Python
+generator scripts used to generate C header files for OpenGL and OpenGL ES,
+can always be found in the Khronos Registry at
+        https://github.com/KhronosGroup/OpenGL-Registry
+    </comment>
+
+=== api_angle/scripts/gl_angle_ext.xml ===
+Source: https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/gl_angle_ext.xml
+Git blob SHA-1: 121ec91966ef6a5ce9d9a92e4e82961ab22ba404
+
+<comment>
+    Copyright 2018 The ANGLE Project Authors. All rights reserved.
+    Use of this source code is governed by a BSD-style license that can be
+    found in the LICENSE file.
+
+    gl_angle_ext.xml
+        Includes data used to auto-generate ANGLE classes.
+    </comment>
+
+=== api_angle/scripts/wgl.xml ===
+Source: https://github.com/google/angle/blob/7403dd2cd3764fe96660fe09892e764e9ae1dbca/scripts/wgl.xml
+Git blob SHA-1: 49277ed4649ab2d38d3d8fc3e528532143e9c2fa
+
+<comment>
+Copyright (c) 2013-2018 The Khronos Group Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------
+
+This file, wgl.xml, is the WGL API Registry. The older ".spec" file
+format has been retired and will no longer be updated with new
+extensions and API versions. The canonical version of the registry,
+together with documentation, schema, and Python generator scripts used
+to generate C header files for WGL, can always be found in the Khronos
+Registry at
+        https://github.com/KhronosGroup/OpenGL-Registry
+    </comment>
+
+=== api_egl/api/egl.xml ===
+Source: https://github.com/KhronosGroup/EGL-Registry/blob/b6b558e7042d67fc7543383bb0e13a075f21d8ab/api/egl.xml
+Git blob SHA-1: ab0a6518b7fe227a13be216f083dea19dc29ddca
+
+<!--
+    Copyright (c) 2013-2017 The Khronos Group Inc.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and/or associated documentation files (the
+    "Materials"), to deal in the Materials without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Materials, and to
+    permit persons to whom the Materials are furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Materials.
+
+    THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+    -->
+
+=== api_webgl/specs/latest/1.0/webgl.idl ===
+Source: https://github.com/KhronosGroup/WebGL/blob/c987f075bfdca44119175c41f547d849c08983a3/specs/latest/1.0/webgl.idl
+Git blob SHA-1: 826dfff0c58e9307be669a1890eedcc1a521ac63
+
+// AUTOGENERATED FILE -- DO NOT EDIT -- SEE Makefile
+//
+// WebGL IDL definitions scraped from the Khronos specification:
+// https://www.khronos.org/registry/webgl/specs/latest/
+
+// Copyright (c) 2018 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+
+=== api_webgl/specs/latest/2.0/webgl2.idl ===
+Source: https://github.com/KhronosGroup/WebGL/blob/c987f075bfdca44119175c41f547d849c08983a3/specs/latest/2.0/webgl2.idl
+Git blob SHA-1: 8c565276dec052684f19cda7b0a37e4867a84bed
+
+// AUTOGENERATED FILE -- DO NOT EDIT -- SEE Makefile
+//
+// WebGL IDL definitions scraped from the Khronos specification:
+// https://www.khronos.org/registry/webgl/specs/latest/
+
+// Copyright (c) 2018 The Khronos Group Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and/or associated documentation files (the
+// "Materials"), to deal in the Materials without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Materials, and to
+// permit persons to whom the Materials are furnished to do so, subject to
+// the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Materials.
+//
+// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.

@@ -1,0 +1,184 @@
+name: Build, verify and release Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.99.0'
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc-posix
+  CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER: i686-w64-mingw32-gcc-posix
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate version and reproducible timestamp
+        id: version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, tomllib
+          with open('Cargo.toml', 'rb') as stream:
+              version = tomllib.load(stream)['package']['version']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', version):
+              raise SystemExit('Unsupported release version')
+          if os.environ['GITHUB_REF_TYPE'] == 'tag' and os.environ['GITHUB_REF_NAME'] != f'v{version}':
+              raise SystemExit('Tag must exactly match Cargo.toml version')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'version={version}\n')
+          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write(f'SOURCE_DATE_EPOCH={epoch}\n')
+          PY
+      - name: Install official Rust and distro cross-compilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes gcc-mingw-w64-x86-64-posix gcc-mingw-w64-i686-posix binutils-mingw-w64
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+          rustup component add rustfmt clippy
+          rustup target add x86_64-pc-windows-gnu i686-pc-windows-gnu
+          rustc -Vv
+          cargo fetch --locked
+          (cd hook-engine && cargo fetch --locked)
+      - name: Format and host tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          python3 scripts/package-release.py --self-test
+          python3 scripts/prepare-windows-tests.py --self-test
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+          (cd hook-engine && cargo fmt --all -- --check && cargo test --locked --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings)
+      - name: Build and audit fixed x86/x64 helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd hook-engine && ./scripts/build-windows.sh && bash fixtures/build-fixture.sh)
+          for target in x86_64-pc-windows-gnu i686-pc-windows-gnu; do
+            (cd hook-engine && cargo clippy --locked --workspace --all-targets --target "$target" -- -D warnings)
+          done
+      - name: Build GUI and portable native test bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+          cargo build --locked --release --target x86_64-pc-windows-gnu
+          python3 scripts/prepare-windows-tests.py
+          python3 scripts/package-release.py
+      - name: Upload candidate assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload portable test bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-test-bundle
+          path: dist/ci/
+          if-no-files-found: error
+          retention-days: 14
+
+  verify-windows:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: incoming/release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-bundle
+          path: incoming/ci
+      - name: Run owned native tests and explicitly opted-in targeted Hook fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content incoming/release/release-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.package_root -notmatch '^CoralSpyNext[-.0-9A-Za-z]*$') { throw 'Invalid package root' }
+          $zip = @(Get-ChildItem incoming/release -Filter '*.zip')
+          if ($zip.Count -ne 1) { throw 'Expected exactly one release ZIP' }
+          Expand-Archive -LiteralPath $zip[0].FullName -DestinationPath incoming/expanded
+          Expand-Archive -LiteralPath incoming/ci/CoralSpyNext-ci-tests.zip -DestinationPath incoming/expanded
+          ./scripts/test-windows-artifact.ps1 -ReleaseDirectory "incoming/expanded/$($manifest.package_root)" -TestBundleDirectory incoming/expanded/verification -RunOwnedFixture
+      - name: Preserve native test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-verification
+          path: incoming/expanded/verification/results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'Antman2023/CoralSpyNext'
+    needs: [build, verify-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-verification
+          path: native-verification
+      - name: Publish a new version without overwriting existing releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+          (cd release-assets && sha256sum --check ./*.sha256)
+          tar -czf release-assets/windows-verification.tar.gz -C native-verification .
+          printf '%s\n\n%s\n%s\n%s\n' \
+            "CoralSpyNext $RELEASE_TAG" \
+            "Windows x64 GUI plus fixed x86/x64 inspection helpers. Extract the entire ZIP; keep all three EXEs together." \
+            "Automated Linux tests, binary audits and owned native Windows fixtures passed for this workflow run. Interactive Windows 11/DPI/real-application acceptance remains separate; see TESTING.md." \
+            "Unsigned binaries. No password extraction or permission bypass. Native test reports and SHA-256 checksums are attached." > release-notes.md
+          options=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "CoralSpyNext $RELEASE_TAG" --notes-file release-notes.md "${options[@]}"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
