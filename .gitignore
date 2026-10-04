@@ -1,0 +1,7 @@
+/target/
+/dist/
+*.log
+*.exe
+*.pdb
+*.dll
+.env
