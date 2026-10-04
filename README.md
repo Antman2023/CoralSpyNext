@@ -1,72 +1,52 @@
 # CoralSpyNext
 
-用 Rust 编写的 Windows 11 x64 原生窗口检查与屏幕取色工具。灵感来自经典 CoralSpy，界面和代码均重新实现。
+Rust 编写的 Windows 11 x64 窗口检查工具。0.2 按经典 CoralSpy 的紧凑结构重新安排界面：顶部工具栏、左侧属性、右侧拖动准星，详情/取色/选项使用独立窗口，默认浅色。
 
-## 这一版可以做什么
+这是独立重写项目，不包含旧 CoralSpy 程序、DLL 或图标。目标是逐项覆盖经典操作，并明确现代 Windows 的能力边界。**“能编译”不等于已经完成原版逐行为、逐像素或 Windows 11 实机验收。**
 
-- **窗口树**：枚举当前桌面的顶层窗口与子窗口，按标题、类名、PID、HWND 搜索。
-- **准星检查**：开始选择后把指针移到目标，按 **Ctrl** 锁定；**Esc** 取消。不会点击或修改目标控件。
-- **窗口详情**：64 位 HWND、父句柄、系统缓存标题、类名、PID/TID、进程文件名、屏幕位置/大小、客户区、DPI、可见/启用状态和窗口样式。
-- **屏幕取色**：读取指针所在屏幕像素，显示 HEX、RGB 和 Windows COLORREF，可复制与查看本次会话历史。
-- **导出**：复制结果，或通过 Windows 保存对话框导出 UTF-8 文本/JSON。
-- **中文界面**：深色/浅色主题；读取系统已安装的中文字体；Per-Monitor V2 DPI 清单。
+## 功能
 
-所有检查均由用户主动操作触发。程序不联网、不写入配置或后台运行，不要求管理员权限。关闭程序后会话数据即消失；只有主动保存的报告留在所选位置。
+- **窗口拾取与属性**：拖动右侧准星，释放锁定；Esc 取消。Ctrl 备用拾取和按两次全局准星热键互不混用。Unicode 标题、x64 HWND、类名、鼠标坐标、PID/TID、进程文件名、矩形、DPI、样式与状态。
+- **常规 / ListV / TreeV / RichEdit**：通过系统 UI Automation 的公开 Text、Value、LegacyIAccessible 等模式读取用户主动选择的控件。支持条目、层级、可访问文本、复制、保存和本地展开/收起；不会用系统 HWND 树冒充目标控件内容。
+- **菜单**：原生菜单栏、系统菜单及 `#32768` 弹出菜单，包含层级、ID、禁用、勾选、分隔符。未知自绘菜单可能只能通过目标应用公开的可访问性内容取得信息。
+- **图标**：窗口、类、受限本地可执行文件资源回退，透明预览与真正 ICO 导出。
+- **IE / IE2 历史兼容**：对已存在的 `Internet Explorer_Server` / MSHTML 宿主读取文档、可访问框架、源码、表单、链接、图片及 Flash 资源引用；宿主支持时可返回/前进/停止/刷新/主页和 TextRange 高亮。不会安装 IE/Flash，也不会把 Edge/Chrome 的 HWND 当作 DOM 接口。
+- **资源下载**：仅在用户点击下载并选择位置后发起 HTTP(S) 请求；不带 cookies 或认证，不跟随重定向，不关闭证书检查；30秒/50MiB 上限，通常失败会清理临时文件，成功才替换目标文件。强制结束/崩溃时可能在目标目录残留唯一命名的 .part 临时文件，原目标文件保持不变。
+- **取色**：独立紧凑窗口，准星取屏幕颜色、Windows COLORREF 十进制/十六进制、HTML HEX、RGB 和色块选择。
+- **托盘 / 置顶 / 热键**：本程序置顶开关、原生托盘菜单、显示主窗口/取色器/两次准星的三组可配置全局热键。冲突明确报错，不抢占其他程序已经注册的热键。程序退出后注销。
+- **选项**：中文/English、明暗外观、热键、托盘及 IE 高亮颜色/粗体/预览。只持久化选项，不保存捕获的窗口/控件内容。
 
-## 与旧版功能的对应关系
+当前实际覆盖和仍待补的细节见 [PARITY_STATUS.md](docs/PARITY_STATUS.md)。原版 89 个可恢复界面入口的逐项清单见 [ORIGINAL_FEATURE_INVENTORY.md](docs/ORIGINAL_FEATURE_INVENTORY.md)。它描述对应项与验收要求，不是未执行测试的通过报告。
 
-这是**实用核心重写版，不是旧版全部功能的完整复刻**。
+## 必须知道的边界
 
-| 旧版功能 | CoralSpyNext 0.1.0 |
-| --- | --- |
-| 准星选中窗口、鼠标位置、句柄/类名/标题 | 已有；改为 Ctrl 锁定，标题只读顶层系统缓存 |
-| 颜色拾取与十进制/十六进制/RGB | 已有；提供 HEX、RGB、COLORREF 和会话历史 |
-| 复制/保存标题与信息 | 已有；窗口元数据文本/JSON 报告 |
-| ListBox/ComboBox、ListV、TreeV 内容读取 | 未实现；现有窗口树显示 HWND 层级，不是目标 TreeView 的条目内容 |
-| RichEdit 内容、图标提取 | 未实现 |
-| IE/IE2 源码、框架、表单、链接/图片/Flash 提取 | 未实现 |
-| 菜单捕获/菜单条目读取 | 未实现 |
-| 密码显示 | 未实现；输入内容不在本版范围 |
-| 全局热键注册 | 未实现；仅应用内 F5/Ctrl+F 和主动拾取期间 Ctrl/Esc |
-| 托盘常驻、置顶、鼠标指针恢复 | 未实现；本版不替换系统鼠标指针 |
-| 英文/中文切换、IE 高亮设置 | 未实现；当前为中文界面 |
+1. **密码与受保护内容**：只标记保护/不可用，不读取密码值，不注入 DLL、不读进程内存、不提权或绕过访问限制。UIA 先检查整个子树保护属性，保护状态未知或采集不完整时抑制可能聚合私密内容的父节点文本。
+2. **虚拟化/折叠控件**：仅能保存提供程序实际公开、已采集的条目。不会自动滚动、展开或 Realize 目标界面；“保存全部”指全部已捕获数据。数量和截断警告必须一同理解，不能声称抓到了应用的隐藏全量内容。
+3. **RichEdit**：可读取公开文本并导出合法 Unicode RTF。提供程序没有公开的原始 RTF 格式、嵌入对象和所有排版不能凭空恢复；文本 RTF 不等于原文档格式的逐字节复制。
+4. **IE/Flash**：这是可选历史 MSHTML 兼容路径，宿主和系统行为决定可用性。现代 Microsoft 文档不把该旧桥接路径视作通用现代浏览器客户端接口。拒绝、跨源错误、无宿主能力时显示原因，不绕过保护，不运行 Flash。源代码在密码检测不确定时不导出；克隆 DOM 的表单值可能反映默认值而非所有宿主的实时编辑状态。
+5. **未实机验收**：初版开发/构建在 Linux 完成。Windows 类型检查、链接和 fixture 编译不证明真实 Windows 11 上所有控件、显卡、DPI、托盘和浏览器宿主都正常。见 [TESTING.md](TESTING.md)。
 
-额外加入了 PID/TID、进程文件名、DPI、窗口样式、明暗主题、异步检查和状态错误提示。
+其他限制：HWND 身份检查是尽力而为；同一进程/类的极快句柄复用无法完全证明身份。屏幕颜色受 HDR、色彩管理、透明叠加、受保护视频和远程桌面影响。图标的网络/可移动/未知卷与大型资源回退会跳过。UIA 有 8 秒进程截止，菜单枚举/图标读取和条目都有预算与上限，失败明确显示。
 
-## 下载和运行
+## 运行
 
-本仓库提供完整可构建源码。便携预览包由维护者单独提供：取得 `CoralSpyNext-windows-x64.zip` 后，解压并运行 `coralspynext.exe`。包内还有说明和 SHA-256 校验值；仓库当前没有 GitHub Release 或活动 CI 产物。
+便携预览包由维护者单独提供。将 `CoralSpyNext-v0.2.0-windows-x64.zip` 整包解压，运行 `coralspynext.exe`；不需要旧软件文件，不要求管理员权限。包内包含源码、说明、SHA-256 与构建信息。
 
-初版可执行文件通过 Linux → Windows GNU 交叉编译生成，尚未在 Windows 11 桌面交互测试。
+程序未签名。只运行可信构建，不要关闭系统安全防护；也可以审阅源码后自行构建。程序除明确资源下载操作外不联网。报告可能含私人应用内容，分享前请检查。
 
-目标系统：**Windows 11 x64**。这是便携程序，不需要安装，也不需要旧 CoralSpy 的任何文件。
+设置位置为 `%LOCALAPPDATA%\CoralSpyNext\settings.json`。内容、窗口标题、网页源码、颜色历史不自动落盘；仅用户选择导出时写入选定位置。
 
-程序尚未进行代码签名。请仅运行你信任的构建，保留系统安全防护；如安全软件阻止运行，可以从源码自行构建。不要为此关闭安全软件。
+## 使用习惯
 
-## 使用
+- 主窗右侧拖动准星到目标后释放；Esc 中止。为避免误触目标，不需要点击目标按钮。
+- 点击“详情”，选原版页签，按“读取详情”；更换目标后重新读取。
+- 主工具栏提供精确复制/保存标题；详情页提供对应内容的复制/保存。
+- 默认全局热键：Ctrl+Alt+W 主窗，Ctrl+Alt+C 取色，Ctrl+Alt+S 开始/结束准星。可在选项里改键或关闭。
+- 遇到“截断 / 不可访问 / 提供程序不支持”，不要把空结果当作目标真的没有内容。
 
-1. 启动后刷新窗口列表，选择一个窗口查看详情；搜索可缩小范围。
-2. 想直接找到屏幕上的窗口，点击窗口选择按钮，然后移动指针到目标。松开原先按住的 Ctrl，再按一次 Ctrl 锁定；按 Esc 放弃选择。
-3. 在取色页使用同样方式选取屏幕像素，再复制 HEX/RGB。
-4. 检查结果可能含窗口标题和应用名称。导出或分享报告前请检查其中是否含私人信息。
+## 构建
 
-选择模式只轮询 Ctrl/Esc 的当前状态，不记录按键、安装全局钩子或阻断输入。Ctrl 会正常传递给系统；请在目标应用空闲时使用。窗口本身不会被点击。
-
-## 范围与已知限制
-
-- **这不是原软件二进制重打包，也不是演示数据界面。** 窗口和颜色来自 Windows API。
-- 不读取密码、输入框/富文本内容，不读取其他进程内存，不注入 DLL，不绕过权限保护。输入类控件仅显示元数据；自有窗口标题也不做同步读取以避免阻塞。
-- 显示的是 HWND 窗口树。浏览器、Electron、UWP/WinUI 等界面的每个视觉元素未必有独立 HWND，不能据此承诺逐个检查所有现代 UI 元素；当前未集成 UI Automation。
-- 无权限、目标关闭或句柄被复用时会报错/要求刷新；不可访问的进程名可能显示为无法读取。不会自动提权。
-- 普通用户无法检查安全桌面、某些受保护窗口。屏幕取色不等同于应用内部原始颜色；HDR、色彩管理、受保护视频、透明层和远程桌面可能影响读数。
-- 枚举最多 6,000 个窗口、32 层且有 2.5 秒预算；达到上限会提示结果不完整。窗口标题最多读取 2,047 个 UTF-16 单元。
-- 列表为刷新时快照；详情为选择/刷新时快照，不持续监控所有应用。
-- 目前不包含旧版的 IE/Flash 提取、列表内容抓取、密码显示、消息钩子和系统托盘常驻功能。
-- eframe 使用 OpenGL 渲染，需要可用的图形驱动。GUI 初始化失败时会提供错误提示。
-
-## 从源码构建
-
-安装 [Rust 官方工具链](https://www.rust-lang.org/tools/install) 与 Visual Studio Build Tools 的 “使用 C++ 的桌面开发”（含 Windows SDK），在 Windows PowerShell 中执行：
+安装 [Rust 官方工具链](https://www.rust-lang.org/tools/install) 和 Visual Studio Build Tools 的“使用 C++ 的桌面开发”（含 Windows SDK），在 Windows PowerShell 执行：
 
 ```powershell
 git clone https://github.com/Antman2023/CoralSpyNext.git
@@ -75,36 +55,22 @@ cargo build --locked --release
 .\target\release\coralspynext.exe
 ```
 
-使用 Rust 1.99.0，依赖由 `Cargo.lock` 固定。推荐 Windows 原生 MSVC 构建。Linux 可以运行平台无关模型测试；GNU 交叉编译需要 MinGW-w64：
+Rust 1.99.0 与 Cargo.lock 锁定依赖。推荐 Windows MSVC 构建。Linux 可运行纯函数测试，交叉编译需 MinGW-w64：
 
 ```sh
 rustup target add x86_64-pc-windows-gnu
-cargo test --locked --lib --tests
+cargo test --locked --all-targets
 cargo build --locked --release --target x86_64-pc-windows-gnu
 ```
 
-源码检查：
+检查：`cargo fmt --all -- --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked --all-targets`。
 
-```powershell
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
-```
+## Windows CI
 
-## Windows CI 模板
+`ci/windows.yml.example` 是非活动模板。维护者可将其复制为 `.github/workflows/windows.yml` 后启用 MSVC 构建。当前发布凭据无 workflow 写入权限，未扩权、未启用 Windows runner；仓库没有已通过的 Windows CI 可供声称。
 
-`ci/windows.yml.example` 可复制为 `.github/workflows/windows.yml` 后启用 Windows MSVC 构建。当前发布凭据没有 workflow 写入权限，因此未上传活动工作流，也未扩大账户权限。模板本身不会运行。
+## 代码结构
 
-## 验证说明
+`platform` 元数据；`accessibility` 受限 UIA helper；`extras` 菜单/图标；`legacy` 历史 MSHTML 与明确下载；`desktop` 托盘/热键；`config` 选项；`content_view` 与 `formats` 数据视图/导出；`app` 经典布局。
 
-自动构建能够验证 Rust 类型、Win32 链接、资源清单、代码规范和单元测试，**不能替代 Windows 11 桌面实际交互验收**。初版是在 Linux 环境开发，未在用户的 Windows 11 实机上运行。详细验收清单见 [TESTING.md](TESTING.md)。
-
-## 项目结构
-
-- `src/platform.rs`：有边界的只读 Win32 后端
-- `src/app.rs`：egui 原生界面、后台工作线程和选择状态机
-- `src/model.rs`：数据模型、格式化与过滤
-- `assets/app.manifest`：DPI 感知及 asInvoker 权限声明
-- `ci/windows.yml.example`：Windows 构建、检查和打包模板（当前未启用）
-
-MIT 许可证。旧版名称及历史归原作者所有，来源与依赖见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+MIT 许可证。原版 CoralSpy 为 Coral Studio 的历史作品，本项目不冒充原作者或声称获得其背书。依赖来源见 [THIRD_PARTY.md](THIRD_PARTY.md)。

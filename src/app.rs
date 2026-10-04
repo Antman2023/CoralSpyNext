@@ -1,36 +1,40 @@
-//! The native UI. All potentially slow window queries run on one bounded worker.
-//! Global key state is read only during a picker explicitly started by the user.
+//! Classic native multi-window UI with one bounded background command worker.
+use coralspynext::{
+    accessibility,
+    config::{self, AppSettings},
+    desktop::{DesktopEvent, DesktopService, HotkeyBinding},
+    extras,
+    legacy::{self, LegacyAction, LegacySnapshot},
+    model::{
+        hwnd_text, ColorSample, ContentSnapshot, IconImage, IconSnapshot, MenuSnapshot, WindowInfo,
+    },
+    platform,
+};
+use eframe::egui::{
+    self, Align, Color32, FontFamily, FontId, Layout, RichText, Sense, Stroke, Vec2,
+};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
-    collections::HashSet,
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     thread,
     time::{Duration, Instant},
 };
-
-use coralspynext::{
-    model::{hwnd_text, matches_filter, ColorSample, WindowInfo, WindowNode},
-    platform,
-};
-use eframe::egui::{
-    self, Align, Align2, Color32, FontFamily, FontId, Layout, RichText, Sense, Stroke, Vec2,
-};
-
-const ACCENT: Color32 = Color32::from_rgb(248, 139, 113);
-const POLL_INTERVAL: Duration = Duration::from_millis(45);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Page {
-    Windows,
-    Colors,
-    About,
-}
+const ACCENT: Color32 = Color32::from_rgb(70, 110, 175);
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PickKind {
     Window,
     Color,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickMode {
+    DragRelease,
+    CtrlLock,
+    HotkeyToggle,
+}
 struct Picker {
     kind: PickKind,
+    mode: PickMode,
     started: Instant,
     next_poll: Instant,
     armed: bool,
@@ -38,11 +42,30 @@ struct Picker {
     sample: Option<ColorSample>,
     error: Option<String>,
 }
-
-enum Job {
-    Enumerate {
-        id: u64,
+#[derive(Clone)]
+enum DetailKind {
+    Content,
+    Menu,
+    Legacy(Option<usize>),
+    Action(Option<usize>, LegacyAction),
+    Highlight {
+        frame: Option<usize>,
+        needle: String,
+        text: [u8; 3],
+        background: [u8; 3],
+        bold: bool,
     },
+}
+enum DetailPayload {
+    Content {
+        content: Result<ContentSnapshot, String>,
+        icons: Result<IconSnapshot, String>,
+    },
+    Menu(MenuSnapshot),
+    Legacy(LegacySnapshot),
+    Action(String, bool),
+}
+enum Job {
     Inspect {
         id: u64,
         hwnd: u64,
@@ -53,20 +76,39 @@ enum Job {
         text: String,
         json: bool,
     },
+    Details {
+        id: u64,
+        hwnd: u64,
+        expected: (u32, String),
+        kind: DetailKind,
+    },
+    SaveIcon {
+        id: u64,
+        icon: IconImage,
+    },
+    SaveNamed {
+        id: u64,
+        text: String,
+        format: &'static str,
+    },
+    Download {
+        id: u64,
+        url: String,
+    },
 }
 impl Job {
     fn id(&self) -> u64 {
         match self {
-            Self::Enumerate { id } | Self::Inspect { id, .. } | Self::Export { id, .. } => *id,
+            Self::Inspect { id, .. }
+            | Self::Export { id, .. }
+            | Self::Details { id, .. }
+            | Self::SaveIcon { id, .. }
+            | Self::SaveNamed { id, .. }
+            | Self::Download { id, .. } => *id,
         }
     }
 }
 enum Reply {
-    Enumerated {
-        id: u64,
-        result: Result<Vec<WindowNode>, String>,
-        notice: Option<String>,
-    },
     Inspected {
         id: u64,
         hwnd: u64,
@@ -76,17 +118,21 @@ enum Reply {
         id: u64,
         result: Result<Option<String>, String>,
     },
+    Details {
+        id: u64,
+        hwnd: u64,
+        result: Result<Box<DetailPayload>, String>,
+    },
 }
 impl Reply {
     fn id(&self) -> u64 {
         match self {
-            Self::Enumerated { id, .. }
-            | Self::Inspected { id, .. }
-            | Self::Exported { id, .. } => *id,
+            Self::Inspected { id, .. } | Self::Exported { id, .. } | Self::Details { id, .. } => {
+                *id
+            }
         }
     }
 }
-
 struct Worker {
     sender: SyncSender<Job>,
     receiver: Receiver<Reply>,
@@ -95,121 +141,245 @@ impl Worker {
     fn new(ctx: egui::Context) -> Self {
         let (sender, jobs) = mpsc::sync_channel::<Job>(1);
         let (answers, receiver) = mpsc::sync_channel::<Reply>(2);
-        // No thread is created on a frame, refresh, or selection. Closing the UI
-        // drops the channels and lets the worker exit without blocking shutdown.
         thread::Builder::new()
             .name("coralspynext-inspector".into())
             .spawn(move || {
                 while let Ok(job) = jobs.recv() {
                     let reply = match job {
-                        Job::Enumerate { id } => {
-                            let result = platform::enumerate_windows();
-                            let notice = platform::enumeration_notice();
-                            Reply::Enumerated { id, result, notice }
-                        }
-                        Job::Inspect { id, hwnd, expected } => {
-                            let result = platform::inspect_window(hwnd).and_then(|info| {
-                                if expected.as_ref().is_some_and(|(pid, class_name)| {
-                                    *pid != info.pid || *class_name != info.class_name
+                        Job::Inspect { id, hwnd, expected } => Reply::Inspected {
+                            id,
+                            hwnd,
+                            result: platform::inspect_window(hwnd).and_then(|info| {
+                                if expected.as_ref().is_some_and(|(pid, class)| {
+                                    *pid != info.pid || *class != info.class_name
                                 }) {
-                                    Err("目标已关闭或句柄被复用，请刷新窗口列表。".into())
+                                    Err("目标已关闭或句柄被复用，请重新选取。".into())
                                 } else {
                                     Ok(info)
                                 }
-                            });
-                            Reply::Inspected { id, hwnd, result }
-                        }
+                            }),
+                        },
                         Job::Export { id, text, json } => Reply::Exported {
                             id,
                             result: platform::save_text_dialog(&text, json),
                         },
+                        Job::SaveIcon { id, icon } => Reply::Exported {
+                            id,
+                            result: extras::save_icon(&icon),
+                        },
+                        Job::SaveNamed { id, text, format } => Reply::Exported {
+                            id,
+                            result: platform::save_text_as(&text, format),
+                        },
+                        Job::Download { id, url } => Reply::Exported {
+                            id,
+                            result: legacy::download_url(&url),
+                        },
+                        Job::Details {
+                            id,
+                            hwnd,
+                            expected,
+                            kind,
+                        } => {
+                            let result = (|| {
+                                if platform::window_identity(hwnd)? != expected {
+                                    return Err("目标已关闭或句柄被复用，请重新选取。".into());
+                                }
+                                let data = match kind {
+                                    DetailKind::Content => DetailPayload::Content {
+                                        content: accessibility::inspect(hwnd),
+                                        icons: extras::inspect_icons(hwnd),
+                                    },
+                                    DetailKind::Menu => {
+                                        DetailPayload::Menu(extras::inspect_menus(hwnd)?)
+                                    }
+                                    DetailKind::Legacy(frame) => {
+                                        DetailPayload::Legacy(legacy::inspect(hwnd, frame)?)
+                                    }
+                                    DetailKind::Action(frame, action) => DetailPayload::Action(
+                                        legacy::action(hwnd, frame, action)?,
+                                        true,
+                                    ),
+                                    DetailKind::Highlight {
+                                        frame,
+                                        needle,
+                                        text,
+                                        background,
+                                        bold,
+                                    } => DetailPayload::Action(
+                                        legacy::highlight(
+                                            hwnd, frame, &needle, text, background, bold,
+                                        )?,
+                                        false,
+                                    ),
+                                };
+                                if platform::window_identity(hwnd)? != expected {
+                                    return Err("读取期间窗口身份发生变化，已丢弃结果。".into());
+                                }
+                                Ok(Box::new(data))
+                            })();
+                            Reply::Details { id, hwnd, result }
+                        }
                     };
                     if answers.send(reply).is_err() {
                         break;
                     }
-                    ctx.request_repaint();
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }
             })
-            .expect("Unable to start the window inspection worker");
+            .expect("Cannot start inspection worker");
         Self { sender, receiver }
     }
 }
-
 pub struct CoralSpyApp {
-    page: Page,
     dark: bool,
     worker: Worker,
     worker_failed: bool,
     next_id: u64,
     in_flight: Option<u64>,
-    refresh_id: u64,
     inspect_id: u64,
-    pending_refresh: Option<Job>,
+    detail_id: u64,
     pending_inspect: Option<Job>,
     pending_export: Option<Job>,
-    refreshing: bool,
+    pending_detail: Option<Job>,
     inspecting: bool,
     exporting: bool,
-    nodes: Vec<WindowNode>,
-    collapsed: HashSet<u64>,
-    filter: String,
-    visible_only: bool,
     selected: Option<u64>,
     selected_identity: Option<(u32, String)>,
     info: Option<WindowInfo>,
     inspection_error: Option<String>,
-    enumeration_error: Option<String>,
-    enumeration_notice: Option<String>,
-    last_refresh: Option<Instant>,
     picker: Option<Picker>,
     color: Option<ColorSample>,
     color_history: Vec<ColorSample>,
     status: String,
     status_error: bool,
-    focus_search: bool,
+    details_open: bool,
+    color_open: bool,
+    options_open: bool,
+    detail_tab: usize,
+    topmost: bool,
+    english: bool,
+    color_edit: [u8; 3],
+    selected_row: Option<usize>,
+    content_rows: Vec<(usize, String, String, String)>,
+    content_text: String,
+    content_warning: String,
+    tree_expanded: bool,
+    reading_details: bool,
+    mouse_position: Option<(i32, i32)>,
+    content_snapshot: Option<ContentSnapshot>,
+    menu_snapshot: Option<MenuSnapshot>,
+    legacy_snapshot: Option<LegacySnapshot>,
+    icons: Vec<IconImage>,
+    icon_textures: Vec<egui::TextureHandle>,
+    legacy_frame: Option<usize>,
+    legacy_filter: usize,
+    legacy_link: Option<usize>,
+    highlight_needle: String,
+    settings: AppSettings,
+    settings_draft: AppSettings,
+    desktop: Option<DesktopService>,
+    hotkey_edit: usize,
+    external_lock: bool,
+    was_minimized: bool,
+    hotkeys_tested: bool,
+    menu_capture: bool,
+    legacy_more: bool,
 }
-
 impl CoralSpyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        apply_theme(&cc.egui_ctx, true);
+        let (settings, warning) = config::load();
+        apply_theme(&cc.egui_ctx, settings.dark);
+        let (desktop, desktop_warning) = match DesktopService::new() {
+            Ok(service) => (Some(service), None),
+            Err(error) => (None, Some(error)),
+        };
         let mut app = Self {
-            page: Page::Windows,
-            dark: true,
+            dark: settings.dark,
             worker: Worker::new(cc.egui_ctx.clone()),
             worker_failed: false,
             next_id: 0,
             in_flight: None,
-            refresh_id: 0,
             inspect_id: 0,
-            pending_refresh: None,
+            detail_id: 0,
             pending_inspect: None,
             pending_export: None,
-            refreshing: false,
+            pending_detail: None,
             inspecting: false,
             exporting: false,
-            nodes: Vec::new(),
-            collapsed: HashSet::new(),
-            filter: String::new(),
-            visible_only: false,
             selected: None,
             selected_identity: None,
             info: None,
             inspection_error: None,
-            enumeration_error: None,
-            enumeration_notice: None,
-            last_refresh: None,
             picker: None,
             color: None,
             color_history: Vec::new(),
-            status: "就绪 · 在本机读取窗口元数据".into(),
+            status: "拖动右侧准星，然后瞄准目标窗口或控件。".into(),
             status_error: false,
-            focus_search: false,
+            details_open: false,
+            color_open: false,
+            options_open: false,
+            detail_tab: 0,
+            topmost: settings.always_on_top,
+            english: settings.language == "en-US",
+            color_edit: [0, 0, 0],
+            selected_row: None,
+            content_rows: Vec::new(),
+            content_text: String::new(),
+            content_warning: String::new(),
+            tree_expanded: true,
+            reading_details: false,
+            mouse_position: None,
+            content_snapshot: None,
+            menu_snapshot: None,
+            legacy_snapshot: None,
+            icons: Vec::new(),
+            icon_textures: Vec::new(),
+            legacy_frame: None,
+            legacy_filter: 0,
+            legacy_link: None,
+            highlight_needle: String::new(),
+            settings_draft: settings.clone(),
+            settings,
+            desktop,
+            hotkey_edit: 0,
+            external_lock: false,
+            was_minimized: false,
+            hotkeys_tested: false,
+            menu_capture: false,
+            legacy_more: false,
         };
-        app.refresh();
+        let registration = app.desktop.as_ref().map(|service| {
+            let handle = cc
+                .window_handle()
+                .map_err(|e| format!("Cannot access main window: {e}"))?;
+            let hwnd = match handle.as_raw() {
+                RawWindowHandle::Win32(window) => window.hwnd.get() as usize as u64,
+                _ => return Err("Unsupported native window handle".into()),
+            };
+            let context = cc.egui_ctx.clone();
+            service.set_gui_window(
+                hwnd,
+                std::sync::Arc::new(move || context.request_repaint_of(egui::ViewportId::ROOT)),
+            )
+        });
+        if let Some(Err(error)) = registration {
+            app.desktop = None;
+            app.notify(error, true);
+        }
+        app.configure_desktop();
+        if let Some(w) = warning.or(desktop_warning) {
+            app.notify(w, true);
+        }
+        cc.egui_ctx
+            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(if app.topmost {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            }));
         app
     }
-
     fn id(&mut self) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
         self.next_id
@@ -218,26 +388,8 @@ impl CoralSpyApp {
         self.status = message.into();
         self.status_error = error;
     }
-    fn refresh(&mut self) {
-        if self.worker_failed {
-            return;
-        }
-        let id = self.id();
-        self.refresh_id = id;
-        self.pending_refresh = Some(Job::Enumerate { id });
-        self.refreshing = true;
-        self.enumeration_error = None;
-    }
     fn select(&mut self, hwnd: u64) {
-        let expected = if self.selected == Some(hwnd) {
-            self.selected_identity.clone()
-        } else {
-            self.nodes
-                .iter()
-                .find(|node| node.hwnd == hwnd)
-                .map(|node| (node.pid, node.class_name.clone()))
-        };
-        self.inspect_target(hwnd, expected);
+        self.inspect_target(hwnd, self.selected_identity.clone());
     }
     fn inspect_target(&mut self, hwnd: u64, expected: Option<(u32, String)>) {
         if self.worker_failed {
@@ -245,24 +397,36 @@ impl CoralSpyApp {
         }
         let id = self.id();
         self.inspect_id = id;
+        self.detail_id = id;
+        self.pending_detail = None;
+        self.reading_details = false;
         self.selected = Some(hwnd);
         self.selected_identity = expected.clone();
         self.info = None;
         self.inspection_error = None;
         self.inspecting = true;
+        self.content_snapshot = None;
+        self.menu_snapshot = None;
+        self.legacy_snapshot = None;
+        self.content_rows.clear();
+        self.content_text.clear();
+        self.content_warning.clear();
+        self.icons.clear();
+        self.icon_textures.clear();
+        self.legacy_frame = None;
+        self.selected_row = None;
         self.pending_inspect = Some(Job::Inspect { id, hwnd, expected });
-        self.page = Page::Windows;
     }
     fn export(&mut self, info: &WindowInfo, json: bool) {
-        self.picker = None;
+        self.cancel_pick();
         if self.exporting || self.worker_failed {
             return;
         }
         let text = if json {
             match serde_json::to_string_pretty(info) {
-                Ok(value) => value,
-                Err(error) => {
-                    self.notify(format!("无法生成 JSON：{error}"), true);
+                Ok(v) => v,
+                Err(e) => {
+                    self.notify(e.to_string(), true);
                     return;
                 }
             }
@@ -270,22 +434,21 @@ impl CoralSpyApp {
             full_report(info)
         };
         let id = self.id();
-        self.pending_export = Some(Job::Export { id, text, json });
         self.exporting = true;
-        self.notify("请选择导出文件的保存位置", false);
+        self.pending_export = Some(Job::Export { id, text, json });
     }
     fn fail_worker(&mut self) {
         self.worker_failed = true;
         self.in_flight = None;
-        self.refreshing = false;
         self.inspecting = false;
+        self.reading_details = false;
         self.exporting = false;
-        self.pending_refresh = None;
         self.pending_inspect = None;
         self.pending_export = None;
-        self.notify("后台检查线程已停止，请关闭并重新打开 CoralSpyNext。", true);
+        self.pending_detail = None;
+        self.notify("后台检查线程已停止，请重新打开程序。", true);
     }
-    fn service_worker(&mut self) {
+    fn service_worker(&mut self, ctx: &egui::Context) {
         loop {
             match self.worker.receiver.try_recv() {
                 Ok(reply) => {
@@ -293,30 +456,6 @@ impl CoralSpyApp {
                         self.in_flight = None;
                     }
                     match reply {
-                        Reply::Enumerated { id, result, notice } if id == self.refresh_id => {
-                            self.refreshing = false;
-                            match result {
-                                Ok(nodes) => {
-                                    self.nodes = nodes;
-                                    self.enumeration_notice = notice;
-                                    self.last_refresh = Some(Instant::now());
-                                    let present: HashSet<u64> =
-                                        self.nodes.iter().map(|n| n.hwnd).collect();
-                                    self.collapsed.retain(|h| present.contains(h));
-                                    self.notify(
-                                        format!(
-                                            "已读取 {} 个窗口 · 点击条目查看详情",
-                                            self.nodes.len()
-                                        ),
-                                        false,
-                                    );
-                                }
-                                Err(error) => {
-                                    self.enumeration_error = Some(error.clone());
-                                    self.notify(format!("窗口列表刷新失败：{error}"), true);
-                                }
-                            }
-                        }
                         Reply::Inspected { id, hwnd, result }
                             if id == self.inspect_id && self.selected == Some(hwnd) =>
                         {
@@ -326,7 +465,15 @@ impl CoralSpyApp {
                                     self.selected_identity =
                                         Some((info.pid, info.class_name.clone()));
                                     self.info = Some(info);
-                                    self.notify("已读取目标窗口 · 数据为当前快照", false);
+                                    if self.menu_capture {
+                                        self.details_open = true;
+                                        self.detail_tab = 6;
+                                        self.queue_detail(DetailKind::Menu);
+                                    }
+                                    self.notify(
+                                        self.tr("已读取目标窗口。", "Target captured."),
+                                        false,
+                                    );
                                 }
                                 Err(error) => {
                                     self.inspection_error = Some(error.clone());
@@ -337,12 +484,101 @@ impl CoralSpyApp {
                         Reply::Exported { result, .. } => {
                             self.exporting = false;
                             match result {
-                                Ok(Some(path)) => self.notify(format!("已导出：{path}"), false),
-                                Ok(None) => self.notify("已取消导出", false),
-                                Err(error) => self.notify(format!("导出失败：{error}"), true),
+                                Ok(Some(path)) => self.notify(
+                                    format!("{}: {path}", self.tr("已保存", "Saved")),
+                                    false,
+                                ),
+                                Ok(None) => {
+                                    self.notify(self.tr("已取消保存", "Save cancelled"), false)
+                                }
+                                Err(error) => self.notify(error, true),
                             }
                         }
-                        _ => {} // A newer refresh or selection superseded this reply.
+                        Reply::Details { id, hwnd, result }
+                            if id == self.detail_id && self.selected == Some(hwnd) =>
+                        {
+                            self.reading_details = false;
+                            match result {
+                                Ok(data) => {
+                                    match *data {
+                                        DetailPayload::Content { content, icons } => {
+                                            self.content_warning.clear();
+                                            match content {
+                                                Ok(snapshot) => {
+                                                    self.content_warning =
+                                                        snapshot.warnings.join("\n");
+                                                    self.content_snapshot = Some(snapshot);
+                                                }
+                                                Err(error) => self.content_warning = error,
+                                            };
+                                            self.icons.clear();
+                                            self.icon_textures.clear();
+                                            match icons {
+                                                Ok(snapshot) => {
+                                                    for (index, icon) in
+                                                        snapshot.icons.into_iter().enumerate()
+                                                    {
+                                                        if icon.width > 0
+                                                            && icon.height > 0
+                                                            && icon.rgba.len()
+                                                                == icon.width as usize
+                                                                    * icon.height as usize
+                                                                    * 4
+                                                        {
+                                                            let image=egui::ColorImage::from_rgba_unmultiplied([icon.width as usize,icon.height as usize],&icon.rgba);
+                                                            self.icon_textures.push(
+                                                                ctx.load_texture(
+                                                                    format!(
+                                                                        "target-icon-{id}-{index}"
+                                                                    ),
+                                                                    image,
+                                                                    egui::TextureOptions::LINEAR,
+                                                                ),
+                                                            );
+                                                            self.icons.push(icon);
+                                                        }
+                                                    }
+                                                    if !snapshot.warnings.is_empty() {
+                                                        self.content_warning.push_str(&format!(
+                                                            "\n{}",
+                                                            snapshot.warnings.join("\n")
+                                                        ));
+                                                    }
+                                                }
+                                                Err(error) => self
+                                                    .content_warning
+                                                    .push_str(&format!("\n图标: {error}")),
+                                            }
+                                        }
+                                        DetailPayload::Menu(snapshot) => {
+                                            self.content_warning = snapshot.warnings.join("\n");
+                                            self.menu_snapshot = Some(snapshot);
+                                        }
+                                        DetailPayload::Legacy(snapshot) => {
+                                            self.content_warning = snapshot.warnings.join("\n");
+                                            self.legacy_link = None;
+                                            self.legacy_snapshot = Some(snapshot);
+                                        }
+                                        DetailPayload::Action(message, refresh) => {
+                                            self.notify(message, false);
+                                            if refresh {
+                                                self.legacy_snapshot = None;
+                                                self.legacy_link = None;
+                                                self.queue_detail(DetailKind::Legacy(
+                                                    self.legacy_frame,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    self.rebuild_rows();
+                                }
+                                Err(error) => {
+                                    self.content_warning = error.clone();
+                                    self.notify(error, true);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -359,25 +595,26 @@ impl CoralSpyApp {
                 .pending_export
                 .take()
                 .or_else(|| self.pending_inspect.take())
-                .or_else(|| self.pending_refresh.take());
+                .or_else(|| self.pending_detail.take());
             if let Some(job) = job {
                 let id = job.id();
                 match self.worker.sender.try_send(job) {
                     Ok(()) => self.in_flight = Some(id),
                     Err(TrySendError::Full(job)) => match job {
-                        Job::Enumerate { .. } => self.pending_refresh = Some(job),
                         Job::Inspect { .. } => self.pending_inspect = Some(job),
-                        Job::Export { .. } => self.pending_export = Some(job),
+                        Job::Details { .. } => self.pending_detail = Some(job),
+                        _ => self.pending_export = Some(job),
                     },
                     Err(TrySendError::Disconnected(_)) => self.fail_worker(),
                 }
             }
         }
     }
-    fn begin_pick(&mut self, kind: PickKind) {
+    fn begin_pick(&mut self, kind: PickKind, mode: PickMode) {
         let now = Instant::now();
         self.picker = Some(Picker {
             kind,
+            mode,
             started: now,
             next_poll: now,
             armed: false,
@@ -385,7 +622,14 @@ impl CoralSpyApp {
             sample: None,
             error: None,
         });
-        self.notify("移动鼠标到目标，按 Ctrl 锁定；按 Esc 取消。", false);
+        self.external_lock = false;
+        self.notify(
+            self.tr(
+                "移动鼠标后按 Ctrl 锁定，Esc 取消。",
+                "Move the pointer, press Ctrl to lock; Esc cancels.",
+            ),
+            false,
+        );
     }
     fn service_picker(&mut self, ctx: &egui::Context) {
         if self.picker.is_none() {
@@ -396,19 +640,21 @@ impl CoralSpyApp {
         if self.picker.as_ref().is_some_and(|p| now < p.next_poll) {
             return;
         }
-        // This is deliberately restricted to Esc and Ctrl, and only
-        // exists for the lifetime of an explicitly activated picker.
         if platform::key_down(0x1b) {
-            self.picker = None;
-            self.notify("已取消拾取", false);
+            self.cancel_pick();
+            self.notify(self.tr("已取消拾取", "Capture cancelled"), false);
             return;
         }
-        let down = platform::key_down(0x11);
-        let picker = self.picker.as_mut().expect("picker checked above");
+        let mode = self.picker.as_ref().expect("picker active").mode;
+        let ctrl = mode == PickMode::CtrlLock && platform::key_down(0x11);
+        let mouse = mode == PickMode::DragRelease && platform::key_down(0x01);
+        let picker = self.picker.as_mut().expect("picker active");
         picker.next_poll = now + POLL_INTERVAL;
+        if mode != PickMode::CtrlLock {
+            picker.armed = true;
+        }
         if !picker.armed {
-            // Require the lock key to be released before arming, avoiding an accidental capture.
-            if !down && now.duration_since(picker.started) >= Duration::from_millis(250) {
+            if !ctrl && now.duration_since(picker.started) >= Duration::from_millis(180) {
                 picker.armed = true;
             }
             return;
@@ -418,6 +664,7 @@ impl CoralSpyApp {
                 Ok(target) => {
                     picker.target = Some(target);
                     picker.error = None;
+                    self.mouse_position = Some((target.1, target.2));
                 }
                 Err(error) => {
                     picker.target = None;
@@ -435,875 +682,1717 @@ impl CoralSpyApp {
                 }
             },
         }
-        if down {
-            let picker = self.picker.take().expect("picker checked above");
-            match picker.kind {
-                PickKind::Window => match picker.target {
-                    Some((hwnd, _, _)) => match platform::window_identity(hwnd) {
+        if (mode == PickMode::DragRelease && !mouse)
+            || (mode == PickMode::CtrlLock && ctrl)
+            || (mode == PickMode::HotkeyToggle && self.external_lock)
+        {
+            self.lock_picker();
+        }
+    }
+    fn lock_picker(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        self.external_lock = false;
+        match picker.kind {
+            PickKind::Window => match picker.target {
+                Some((hwnd, x, y)) => {
+                    self.mouse_position = Some((x, y));
+                    match platform::window_identity(hwnd) {
                         Ok(identity) => self.inspect_target(hwnd, Some(identity)),
                         Err(error) => self.notify(error, true),
-                    },
-                    None => self.notify(
-                        picker
-                            .error
-                            .unwrap_or_else(|| "此位置没有可读取的窗口，请重试。".into()),
-                        true,
+                    }
+                }
+                None => self.notify(
+                    picker
+                        .error
+                        .unwrap_or_else(|| "此位置没有可读取窗口。".into()),
+                    true,
+                ),
+            },
+            PickKind::Color => match picker.sample {
+                Some(sample) => {
+                    self.color = Some(sample);
+                    self.color_edit = [sample.r, sample.g, sample.b];
+                    self.color_history
+                        .retain(|c| (c.r, c.g, c.b) != (sample.r, sample.g, sample.b));
+                    self.color_history.insert(0, sample);
+                    self.color_history.truncate(24);
+                    self.notify(
+                        format!("{}  ({}, {})", sample.hex(), sample.x, sample.y),
+                        false,
+                    );
+                }
+                None => self.notify(
+                    picker
+                        .error
+                        .unwrap_or_else(|| "此位置无法采集颜色。".into()),
+                    true,
+                ),
+            },
+        }
+    }
+
+    fn configure_desktop(&mut self) {
+        let bindings = self.settings.hotkeys.map(|h| HotkeyBinding {
+            modifiers: h.modifiers,
+            key: h.key,
+        });
+        if let Some(service) = &self.desktop {
+            let hotkeys = service.set_hotkeys(self.settings.hotkeys_enabled, bindings);
+            let tray = service.set_tray(self.settings.tray_enabled);
+            let language = service.set_language(self.settings.language == "en-US");
+            if let Err(error) = hotkeys {
+                self.settings.hotkeys_enabled = false;
+                self.notify(error, true);
+            }
+            if let Err(error) = language {
+                self.notify(error, true);
+            }
+            if let Err(error) = tray {
+                self.settings.tray_enabled = false;
+                self.settings.minimize_to_tray = false;
+                self.notify(error, true);
+            }
+        } else {
+            self.settings.hotkeys_enabled = false;
+            self.settings.tray_enabled = false;
+            self.settings.minimize_to_tray = false;
+        }
+    }
+    fn open_options(&mut self) {
+        self.cancel_pick();
+        if self.options_open {
+            return;
+        }
+        self.hotkeys_tested = false;
+        self.settings_draft = self.settings.clone();
+        self.options_open = true;
+    }
+    fn test_hotkeys(&mut self, enable: bool) {
+        let bindings = self.settings_draft.hotkeys.map(|h| HotkeyBinding {
+            modifiers: h.modifiers,
+            key: h.key,
+        });
+        let result = self
+            .desktop
+            .as_ref()
+            .ok_or_else(|| "Desktop service unavailable".to_string())
+            .and_then(|service| service.set_hotkeys(enable, bindings));
+        self.hotkeys_tested = true;
+        match result {
+            Ok(()) => {
+                self.settings_draft.hotkeys_enabled = enable;
+                self.notify(
+                    self.tr(
+                        "热键已临时应用；确定保存，取消恢复。",
+                        "Hotkeys applied temporarily. OK saves; Cancel restores.",
                     ),
-                },
-                PickKind::Color => match picker.sample {
-                    Some(sample) => {
-                        self.color = Some(sample);
-                        self.color_history
-                            .retain(|c| (c.r, c.g, c.b) != (sample.r, sample.g, sample.b));
-                        self.color_history.insert(0, sample);
-                        self.color_history.truncate(24);
+                    false,
+                );
+            }
+            Err(error) => {
+                self.settings_draft.hotkeys_enabled = false;
+                self.notify(error, true);
+            }
+        }
+    }
+    fn cancel_options(&mut self) {
+        if self.hotkeys_tested {
+            let bindings = self.settings.hotkeys.map(|h| HotkeyBinding {
+                modifiers: h.modifiers,
+                key: h.key,
+            });
+            if let Some(service) = &self.desktop {
+                if let Err(error) = service.set_hotkeys(self.settings.hotkeys_enabled, bindings) {
+                    self.settings.hotkeys_enabled = false;
+                    self.notify(error, true);
+                }
+            }
+        }
+        self.hotkeys_tested = false;
+        self.options_open = false;
+    }
+    fn apply_settings(&mut self, ctx: &egui::Context) -> bool {
+        if let Err(error) = self.settings_draft.validate() {
+            self.notify(error, true);
+            return false;
+        }
+        // Persistence must succeed before committing the draft or clearing
+        // the temporary-hotkey rollback marker used by Cancel.
+        if let Err(error) = config::save(&self.settings_draft) {
+            self.notify(error, true);
+            return false;
+        }
+        self.hotkeys_tested = false;
+        self.settings = self.settings_draft.clone();
+        self.configure_desktop();
+        self.settings_draft = self.settings.clone();
+        self.english = self.settings.language == "en-US";
+        self.dark = self.settings.dark;
+        self.topmost = self.settings.always_on_top;
+        apply_theme(ctx, self.dark);
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::WindowLevel(if self.topmost {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            }),
+        );
+        true
+    }
+    fn save_preferences(&mut self) {
+        if let Err(error) = config::save(&self.settings) {
+            self.notify(error, true);
+        }
+    }
+    fn show_main(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::Minimized(false),
+        );
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    }
+    fn service_desktop(&mut self, ctx: &egui::Context) {
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|service| !service.is_running())
+        {
+            self.settings.hotkeys_enabled = false;
+            self.settings.tray_enabled = false;
+            self.settings.minimize_to_tray = false;
+            self.desktop = None;
+            self.show_main(ctx);
+            self.notify(
+                self.tr(
+                    "托盘服务已停止，主窗口保持可见。",
+                    "The tray service stopped; the main window remains visible.",
+                ),
+                true,
+            );
+        }
+        let mut restored_this_frame = false;
+        for _ in 0..32 {
+            let event = self.desktop.as_ref().and_then(DesktopService::try_recv);
+            let Some(event) = event else {
+                break;
+            };
+            match event {
+                DesktopEvent::ShowMain => {
+                    self.show_main(ctx);
+                    restored_this_frame = true;
+                }
+                DesktopEvent::ShowColor => {
+                    self.show_main(ctx);
+                    restored_this_frame = true;
+                    self.color_open = true;
+                }
+                DesktopEvent::StartCapture => {
+                    self.show_main(ctx);
+                    restored_this_frame = true;
+                    if self
+                        .picker
+                        .as_ref()
+                        .is_some_and(|p| p.mode == PickMode::HotkeyToggle)
+                    {
+                        self.external_lock = true;
+                    } else {
+                        self.begin_pick(PickKind::Window, PickMode::HotkeyToggle);
+                        self.notify(self.tr("移动鼠标后，再按一次准星热键锁定；Esc 取消。","Move the pointer, then press the crosshair hotkey again; Esc cancels."),false);
+                    }
+                }
+                DesktopEvent::ShowOptions => {
+                    self.show_main(ctx);
+                    restored_this_frame = true;
+                    self.open_options();
+                }
+                DesktopEvent::ShowAbout => {
+                    self.show_main(ctx);
+                    restored_this_frame = true;
+                    self.open_details();
+                    self.detail_tab = 7;
+                }
+                DesktopEvent::Exit => {
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close)
+                }
+                DesktopEvent::Notice(message) => self.notify(message, true),
+            }
+        }
+        if self.desktop.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if !restored_this_frame
+            && minimized
+            && !self.was_minimized
+            && self.settings.tray_enabled
+            && self
+                .desktop
+                .as_ref()
+                .is_some_and(DesktopService::is_running)
+            && self.settings.minimize_to_tray
+        {
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                egui::ViewportCommand::Visible(false),
+            );
+        }
+        self.was_minimized = minimized;
+    }
+    fn queue_detail(&mut self, kind: DetailKind) {
+        self.cancel_pick();
+        let Some(hwnd) = self.selected else {
+            self.content_warning = self
+                .tr(
+                    "请先拖动准星选择目标窗口。",
+                    "Drag the crosshair to select a target first.",
+                )
+                .into();
+            return;
+        };
+        let Some(expected) = self.selected_identity.clone() else {
+            self.content_warning = self
+                .tr(
+                    "正在确认窗口身份，请稍后重试。",
+                    "Wait for the window identity check, then retry.",
+                )
+                .into();
+            return;
+        };
+        if self.worker_failed {
+            return;
+        }
+        if matches!(&kind, DetailKind::Action(..) | DetailKind::Highlight { .. }) {
+            // A command can partially change the remote page even when its
+            // response times out. Never keep that old source exportable.
+            self.legacy_snapshot = None;
+            self.legacy_link = None;
+        }
+        let id = self.id();
+        self.detail_id = id;
+        self.reading_details = true;
+        self.content_warning = self
+            .tr(
+                "正在读取，受保护控件会保留保护标记…",
+                "Reading; protected controls remain redacted…",
+            )
+            .into();
+        self.pending_detail = Some(Job::Details {
+            id,
+            hwnd,
+            expected,
+            kind,
+        });
+    }
+    fn rebuild_rows(&mut self) {
+        self.content_rows.clear();
+        self.selected_row = None;
+        if self.detail_tab == 6 {
+            if let Some(menu) = &self.menu_snapshot {
+                for entry in &menu.entries {
+                    self.content_rows.push((
+                        entry.depth,
+                        if entry.separator {
+                            "────────".into()
+                        } else {
+                            entry.label.clone()
+                        },
+                        format!("ID {}", entry.id),
+                        format!(
+                            "{}{}{}",
+                            if entry.enabled {
+                                ""
+                            } else {
+                                "禁用 Disabled "
+                            },
+                            if entry.checked { "✓ " } else { "" },
+                            if entry.submenu {
+                                "子菜单 Submenu"
+                            } else {
+                                ""
+                            }
+                        ),
+                    ));
+                }
+            }
+        } else if let Some(snapshot) = &self.content_snapshot {
+            self.content_rows = coralspynext::content_view::logical_rows(snapshot, self.detail_tab);
+        }
+        self.content_text = if self.detail_tab == 6 {
+            let mut report = self
+                .content_rows
+                .iter()
+                .map(|(depth, name, role, value)| {
+                    format!(
+                        "{}{}\t{}\t{}",
+                        "  ".repeat((*depth).min(32)),
+                        name,
+                        role,
+                        value
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Some(snapshot) = &self.menu_snapshot {
+                for warning in &snapshot.warnings {
+                    report.push_str(&format!("\nWARNING: {warning}"));
+                }
+            }
+            report
+        } else if let Some(snapshot) = &self.content_snapshot {
+            if self.detail_tab == 5 {
+                coralspynext::content_view::rich_text(snapshot)
+            } else {
+                coralspynext::content_view::report(snapshot, self.detail_tab)
+            }
+        } else {
+            String::new()
+        };
+    }
+    fn icon_contents(&mut self, ui: &mut egui::Ui) {
+        ui.label(self.tr("图标", "Icons"));
+        if self.icons.is_empty() {
+            ui.label(self.tr(
+                "目标未提供可读取的图标。",
+                "No readable icons were provided by the target.",
+            ));
+            return;
+        }
+        let mut save = None;
+        ui.horizontal_wrapped(|ui| {
+            for (i, (icon, texture)) in self.icons.iter().zip(&self.icon_textures).enumerate() {
+                ui.vertical(|ui| {
+                    if ui
+                        .add(
+                            egui::Image::new(texture)
+                                .fit_to_exact_size(Vec2::splat(36.0))
+                                .sense(Sense::click()),
+                        )
+                        .on_hover_text(self.tr("保存图标", "Save icon"))
+                        .clicked()
+                        && !self.exporting
+                    {
+                        save = Some(i);
+                    }
+                    ui.small(&icon.kind);
+                    if ui
+                        .add_enabled(
+                            !self.exporting,
+                            egui::Button::new(self.tr("保存 ICO", "Save ICO")).small(),
+                        )
+                        .clicked()
+                    {
+                        save = Some(i);
+                    }
+                });
+            }
+        });
+        if let Some(index) = save {
+            self.cancel_pick();
+            let id = self.id();
+            self.exporting = true;
+            self.pending_export = Some(Job::SaveIcon {
+                id,
+                icon: self.icons[index].clone(),
+            });
+        }
+    }
+
+    fn tr<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
+        if self.english {
+            en
+        } else {
+            zh
+        }
+    }
+    fn cancel_pick(&mut self) {
+        self.picker = None;
+        self.external_lock = false;
+    }
+    fn open_details(&mut self) {
+        self.cancel_pick();
+        self.details_open = true;
+    }
+    fn refresh_target(&mut self) {
+        self.cancel_pick();
+        if let Some(hwnd) = self.selected {
+            self.select(hwnd);
+        } else {
+            self.notify(
+                self.tr(
+                    "请先拖动准星选取目标。",
+                    "Drag the crosshair to select a target first.",
+                ),
+                false,
+            );
+        }
+    }
+    fn save_named(&mut self, text: String, format: &'static str) {
+        self.cancel_pick();
+        if self.exporting || self.worker_failed {
+            return;
+        }
+        let id = self.id();
+        self.exporting = true;
+        self.pending_export = Some(Job::SaveNamed { id, text, format });
+    }
+    fn save_string(&mut self, text: String) {
+        self.cancel_pick();
+        if self.exporting || self.worker_failed {
+            return;
+        }
+        let id = self.id();
+        self.exporting = true;
+        self.pending_export = Some(Job::Export {
+            id,
+            text,
+            json: false,
+        });
+    }
+    fn main_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if tool(
+                ui,
+                0,
+                self.tr("显示颜色拾取器", "Show color picker"),
+                self.color_open,
+            ) {
+                self.cancel_pick();
+                self.color_open = true;
+            }
+            ui.separator();
+            if tool(ui, 1, self.tr("刷新信息", "Refresh information"), false) {
+                self.refresh_target();
+            }
+            if tool(
+                ui,
+                2,
+                self.tr("查看详情", "View details"),
+                self.details_open,
+            ) {
+                self.open_details();
+            }
+            if tool(
+                ui,
+                3,
+                self.tr("恢复鼠标指针 / 取消拾取", "Restore cursor / cancel capture"),
+                false,
+            ) {
+                self.cancel_pick();
+            }
+            if tool(
+                ui,
+                4,
+                self.tr("捕捉菜单", "Capture menu"),
+                self.menu_capture,
+            ) {
+                self.menu_capture = !self.menu_capture;
+                if self.menu_capture {
+                    self.open_details();
+                    self.detail_tab = 6;
+                    self.rebuild_rows();
+                    if self.selected.is_some() {
+                        self.request_content();
+                    } else {
                         self.notify(
-                            format!(
-                                "已采集 {} · 屏幕坐标 ({}, {})",
-                                sample.hex(),
-                                sample.x,
-                                sample.y
+                            self.tr(
+                                "菜单捕捉已开启，请拖动准星到目标菜单。",
+                                "Menu capture is on. Drag the crosshair to a menu.",
                             ),
                             false,
                         );
                     }
-                    None => self.notify(
-                        picker
-                            .error
-                            .unwrap_or_else(|| "无法读取此位置的屏幕颜色，请重试。".into()),
-                        true,
-                    ),
-                },
+                }
             }
-        }
-    }
-
-    fn header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("header")
-            .exact_height(72.0)
-            .frame(
-                egui::Frame::default()
-                    .fill(surface(self.dark))
-                    .inner_margin(egui::Margin::symmetric(22, 14)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    draw_brand(ui, 36.0);
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("CoralSpyNext").size(22.0).strong());
-                        ui.label(
-                            RichText::new("WINDOW INSPECTOR  /  窗口洞察")
-                                .size(10.5)
-                                .color(muted(self.dark)),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .button(if self.dark {
-                                "浅色外观"
-                            } else {
-                                "深色外观"
-                            })
-                            .on_hover_text("切换明暗主题")
-                            .clicked()
-                        {
-                            self.dark = !self.dark;
-                            apply_theme(ctx, self.dark);
-                        }
-                        ui.add_space(10.0);
-                        pill(ui, "本地运行", self.dark, false);
-                    });
-                });
-            });
-    }
-    fn sidebar(&mut self, ctx: &egui::Context) {
-        let compact = ctx.screen_rect().width() < 960.0;
-        egui::SidePanel::left("navigation")
-            .resizable(false)
-            .exact_width(if compact { 126.0 } else { 164.0 })
-            .frame(
-                egui::Frame::default()
-                    .fill(surface(self.dark))
-                    .inner_margin(egui::Margin::symmetric(14, 20)),
-            )
-            .show(ctx, |ui| {
-                ui.label(RichText::new("工作台").size(11.0).color(muted(self.dark)));
-                ui.add_space(14.0);
-                for (page, name, sub) in [
-                    (Page::Windows, "窗口检查", "WINDOWS"),
-                    (Page::Colors, "屏幕取色", "COLORS"),
-                    (Page::About, "关于与边界", "ABOUT"),
-                ] {
-                    let selected = self.page == page;
-                    let text = format!("{name}\n{sub}");
-                    let response = ui.add_sized(
-                        [ui.available_width(), 56.0],
-                        egui::Button::new(RichText::new(text).size(13.0))
-                            .fill(if selected {
-                                accent_bg(self.dark)
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .stroke(if selected {
-                                Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.5))
-                            } else {
-                                Stroke::NONE
-                            }),
-                    );
-                    if response.clicked() {
-                        if self.picker.take().is_some() {
-                            self.notify("已取消拾取", false);
-                        }
-                        self.page = page;
-                    }
-                    ui.add_space(8.0);
-                }
-                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    ui.label(
-                        RichText::new("v0.1.0  ·  x64")
-                            .size(11.0)
-                            .color(muted(self.dark)),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("只读检查\n默认普通权限")
-                            .size(12.0)
-                            .color(muted(self.dark)),
-                    );
-                    ui.add_space(8.0);
-                    ui.separator();
-                });
-            });
-    }
-    fn footer(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(32.0)
-            .frame(
-                egui::Frame::default()
-                    .fill(surface(self.dark))
-                    .inner_margin(egui::Margin::symmetric(18, 6)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if self.in_flight.is_some() {
-                        ui.add(egui::Spinner::new().size(13.0));
-                    } else {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                        ui.painter().circle_filled(
-                            rect.center(),
-                            3.0,
-                            if self.status_error {
-                                error_color(self.dark)
-                            } else {
-                                ACCENT
-                            },
-                        );
-                    }
-                    ui.add(
-                        egui::Label::new(RichText::new(&self.status).size(11.5).color(
-                            if self.status_error {
-                                error_color(self.dark)
-                            } else {
-                                muted(self.dark)
-                            },
-                        ))
-                        .truncate(),
-                    )
-                    .on_hover_text(&self.status);
-                });
-            });
-    }
-    fn picker_banner(&self, ui: &mut egui::Ui) {
-        let Some(picker) = &self.picker else {
-            return;
-        };
-        egui::Frame::default()
-            .fill(accent_bg(self.dark))
-            .stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.6)))
-            .corner_radius(10)
-            .inner_margin(14)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(if picker.kind == PickKind::Window {
-                        "正在拾取窗口"
-                    } else {
-                        "正在采集屏幕颜色"
-                    })
-                    .strong()
-                    .color(accent_text(self.dark)),
-                );
-                ui.label("将鼠标移到目标位置，按 Ctrl 锁定；按 Esc 取消。");
-                ui.label(
-                    RichText::new("无需点击目标应用，拾取不会模拟或拦截任何输入。")
-                        .size(12.0)
-                        .color(muted(self.dark)),
-                );
-                if !picker.armed {
-                    ui.small("请先松开 Ctrl 键…");
-                }
-                if let Some((hwnd, x, y)) = picker.target {
-                    ui.monospace(format!("{}    X {x}  Y {y}", hwnd_text(hwnd)));
-                }
-                if let Some(sample) = picker.sample {
-                    ui.monospace(format!(
-                        "{}    {}    X {}  Y {}",
-                        sample.hex(),
-                        sample.rgb(),
-                        sample.x,
-                        sample.y
-                    ));
-                }
-                if let Some(error) = &picker.error {
-                    ui.colored_label(error_color(self.dark), error);
-                }
-            });
-        ui.add_space(14.0);
-    }
-    fn windows_page(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("窗口检查");
-                ui.label(
-                    RichText::new("从窗口树选择，或直接拾取屏幕上的目标。 ")
-                        .size(12.5)
-                        .color(muted(self.dark)),
-                );
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        self.picker.is_none() && !self.worker_failed,
-                        primary_button("＋  拾取窗口"),
-                    )
-                    .clicked()
-                {
-                    self.begin_pick(PickKind::Window);
-                }
-                if ui
-                    .add_enabled(
-                        !self.refreshing && !self.worker_failed,
-                        egui::Button::new("刷新  F5"),
-                    )
-                    .clicked()
-                {
-                    self.refresh();
-                }
-            });
-        });
-        ui.add_space(16.0);
-        self.picker_banner(ui);
-        let width = ui.available_width();
-        let tree_width = (width * 0.38).clamp(245.0, 355.0);
-        let height = ui.available_height();
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(tree_width, height),
-                Layout::top_down(Align::LEFT),
-                |ui| {
-                    ui.set_width(tree_width);
-                    ui.set_min_height(height);
-                    self.window_tree(ui);
-                },
-            );
-            ui.add_space(8.0);
             ui.separator();
-            ui.add_space(8.0);
-            ui.allocate_ui_with_layout(
-                Vec2::new((width - tree_width - 34.0).max(240.0), height),
-                Layout::top_down(Align::LEFT),
-                |ui| {
-                    ui.set_width(ui.available_width());
-                    egui::ScrollArea::vertical()
-                        .id_salt("window_details")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.window_details(ui));
-                },
-            );
-        });
-    }
-    fn window_tree(&mut self, ui: &mut egui::Ui) {
-        let response = ui.add_sized(
-            [ui.available_width(), 34.0],
-            egui::TextEdit::singleline(&mut self.filter).hint_text("搜索标题、类名、PID、HWND"),
-        );
-        if self.focus_search {
-            response.request_focus();
-            self.focus_search = false;
-        }
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.visible_only, "仅可见");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button("展开")
-                    .on_hover_text("展开所有层级")
-                    .clicked()
+            if tool(
+                ui,
+                5,
+                self.tr("复制标题内容到剪贴板", "Copy title to clipboard"),
+                false,
+            ) {
+                if let Some(info) = &self.info {
+                    ui.ctx().copy_text(info.title.clone());
+                }
+            }
+            if tool(
+                ui,
+                6,
+                self.tr("保存标题内容到硬盘", "Save title to disk"),
+                false,
+            ) {
+                if let Some(info) = &self.info {
+                    self.save_string(info.title.clone());
+                }
+            }
+            ui.separator();
+            if tool(ui, 7, self.tr("选项", "Options"), self.options_open) {
+                self.cancel_pick();
+                self.open_options();
+            }
+            if tool(
+                ui,
+                8,
+                self.tr("激活 / 取消热键", "Enable / disable hotkeys"),
+                self.settings.hotkeys_enabled,
+            ) {
+                self.settings.hotkeys_enabled = !self.settings.hotkeys_enabled;
+                self.configure_desktop();
+                self.save_preferences();
+            }
+            if tool(
+                ui,
+                9,
+                self.tr("最小化到系统托盘", "Minimize to system tray"),
+                false,
+            ) {
+                if self.settings.tray_enabled
+                    && self
+                        .desktop
+                        .as_ref()
+                        .is_some_and(DesktopService::is_running)
                 {
-                    self.collapsed.clear();
+                    self.cancel_pick();
+                    ui.ctx().send_viewport_cmd_to(
+                        egui::ViewportId::ROOT,
+                        egui::ViewportCommand::Visible(false),
+                    );
+                } else {
+                    self.notify(
+                        self.tr(
+                            "托盘未启用，请在选项中启用。",
+                            "Enable the tray in Options first.",
+                        ),
+                        true,
+                    );
+                    self.open_options();
                 }
-                if ui
-                    .small_button("折叠")
-                    .on_hover_text("仅显示顶层窗口")
-                    .clicked()
-                {
-                    self.collapsed = self.nodes.iter().map(|n| n.hwnd).collect();
-                }
-            });
-        });
-        ui.add_space(6.0);
-        if let Some(error) = &self.enumeration_error {
-            ui.colored_label(error_color(self.dark), error);
-        }
-        if let Some(notice) = &self.enumeration_notice {
-            ui.label(
-                RichText::new(notice)
-                    .size(11.0)
-                    .color(accent_text(self.dark)),
-            );
-        }
-        let parents: HashSet<u64> = self
-            .nodes
-            .iter()
-            .filter(|n| n.parent != 0)
-            .map(|n| n.parent)
-            .collect();
-        let searching = !self.filter.trim().is_empty();
-        let mut hidden_depth = None;
-        let visible: Vec<usize> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, node)| {
-                if !searching {
-                    if let Some(depth) = hidden_depth {
-                        if node.depth > depth {
-                            return None;
-                        }
-                        hidden_depth = None;
-                    }
-                    if self.collapsed.contains(&node.hwnd) {
-                        hidden_depth = Some(node.depth);
-                    }
-                }
-                (matches_filter(node, &self.filter) && (!self.visible_only || node.visible))
-                    .then_some(index)
-            })
-            .collect();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{} 项 / 共 {} 个窗口",
-                    visible.len(),
-                    self.nodes.len()
-                ))
-                .size(11.0)
-                .color(muted(self.dark)),
-            );
-            if self.refreshing {
-                ui.add(egui::Spinner::new().size(12.0));
+            }
+            ui.separator();
+            if tool(ui, 10, self.tr("关于这玩意儿", "About this program"), false) {
+                self.open_details();
+                self.detail_tab = 7;
+            }
+            ui.separator();
+            if tool(
+                ui,
+                11,
+                self.tr("始终最前端显示", "Always on top"),
+                self.topmost,
+            ) {
+                self.topmost = !self.topmost;
+                self.settings.always_on_top = self.topmost;
+                self.save_preferences();
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::WindowLevel(if self.topmost {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    }));
             }
         });
-        ui.add_space(6.0);
-        if visible.is_empty() {
-            ui.add_space(35.0);
-            ui.label(if self.refreshing {
-                "正在读取窗口列表…"
-            } else if self.nodes.is_empty() {
-                "暂无可读取的窗口。点击刷新重试。"
-            } else {
-                "没有匹配项，试试更短的关键词。"
-            });
+    }
+    fn crosshair(&mut self, ui: &mut egui::Ui, kind: PickKind) {
+        let compact = kind == PickKind::Color;
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::splat(if compact { 48.0 } else { 58.0 }),
+            Sense::click_and_drag(),
+        );
+        let color = if self.picker.as_ref().is_some_and(|p| p.kind == kind) {
+            Color32::from_rgb(175, 36, 36)
+        } else {
+            ui.visuals().text_color()
+        };
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+        let c = rect.center();
+        ui.painter()
+            .circle_stroke(c, 15.0, Stroke::new(1.5_f32, color));
+        ui.painter()
+            .circle_stroke(c, 5.0, Stroke::new(1.0_f32, color));
+        ui.painter().line_segment(
+            [c - Vec2::new(22.0, 0.0), c + Vec2::new(22.0, 0.0)],
+            Stroke::new(1.0_f32, color),
+        );
+        ui.painter().line_segment(
+            [c - Vec2::new(0.0, 22.0), c + Vec2::new(0.0, 22.0)],
+            Stroke::new(1.0_f32, color),
+        );
+        if response.drag_started_by(egui::PointerButton::Primary) && self.picker.is_none() {
+            self.begin_pick(kind, PickMode::DragRelease);
+            self.notify(
+                self.tr(
+                    "按住左键拖动准星，松开选取；Esc 取消。",
+                    "Drag while holding the left button; release to capture. Esc cancels.",
+                ),
+                false,
+            );
         }
-        let mut selection = None;
-        let mut collapse_toggle = None;
-        egui::ScrollArea::vertical()
-            .id_salt("window_tree")
-            .auto_shrink([false, false])
-            .show_rows(ui, 54.0, visible.len(), |ui, range| {
-                for row in range {
-                    let node = &self.nodes[visible[row]];
-                    let (rect, response) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 54.0), Sense::click());
-                    let selected = self.selected == Some(node.hwnd);
-                    let fill = if selected {
-                        accent_bg(self.dark)
-                    } else if response.hovered() {
-                        hover_bg(self.dark)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    ui.painter()
-                        .rect_filled(rect.shrink2(Vec2::new(0.0, 2.0)), 7.0, fill);
-                    if selected {
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_size(
-                                rect.min + Vec2::new(0.0, 10.0),
-                                Vec2::new(3.0, 34.0),
-                            ),
-                            2.0,
-                            ACCENT,
-                        );
-                    }
-                    let indentation = (node.depth.min(4) as f32) * 11.0;
-                    let x = rect.left() + 9.0 + indentation;
-                    let disclosure = egui::Rect::from_min_size(
-                        egui::pos2(x, rect.top() + 14.0),
-                        Vec2::new(15.0, 24.0),
+        let response = response.on_hover_text(self.tr(
+            "拖动准星，然后瞄准目标窗口或控件\n按住左键拖出本窗口，松开选取；Esc 取消。",
+            "Drag the crosshair to the target; release to capture. Esc cancels.",
+        ));
+        response.context_menu(|ui| {
+            if ui.button(self.tr("Ctrl 拾取", "Ctrl capture")).clicked() {
+                self.begin_pick(kind, PickMode::CtrlLock);
+                ui.close_menu();
+            }
+        });
+        if !compact {
+            ui.label(self.tr("拖动准星", "Drag target"));
+            if ui
+                .small_button(self.tr("Ctrl 拾取", "Ctrl capture"))
+                .on_hover_text(self.tr(
+                    "移动鼠标后按 Ctrl 锁定，Esc 取消。",
+                    "Move the pointer, press Ctrl to lock; Esc cancels.",
+                ))
+                .clicked()
+            {
+                self.begin_pick(kind, PickMode::CtrlLock);
+            }
+        }
+    }
+    fn main_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_top(|ui| {
+            let left_width = (ui.available_width() - 88.0).max(270.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(left_width, 205.0),
+                Layout::top_down(Align::LEFT),
+                |ui| {
+                    ui.set_width(left_width);
+                    ui.group(|ui| {
+                        ui.set_width(left_width - 14.0);
+                        ui.label(self.tr("信息", "Information"));
+                        let live = self.picker.as_ref().and_then(|p| p.target);
+                        let pos = live
+                            .map(|(_, x, y)| (x, y))
+                            .or(self.mouse_position)
+                            .map(|(x, y)| format!("{x}, {y}"))
+                            .unwrap_or_default();
+                        let hwnd = live
+                            .map(|t| t.0)
+                            .or(self.selected)
+                            .map(hwnd_text)
+                            .unwrap_or_default();
+                        let class = self
+                            .info
+                            .as_ref()
+                            .filter(|info| live.is_none_or(|t| t.0 == info.hwnd))
+                            .map(|i| i.class_name.clone())
+                            .unwrap_or_default();
+                        let title = self
+                            .info
+                            .as_ref()
+                            .filter(|info| live.is_none_or(|t| t.0 == info.hwnd))
+                            .map(|i| i.title.clone())
+                            .unwrap_or_default();
+                        egui::Grid::new("main_properties")
+                            .num_columns(2)
+                            .spacing([7.0, 7.0])
+                            .show(ui, |ui| {
+                                readonly_row(
+                                    ui,
+                                    self.tr("鼠标:", "Mouse:"),
+                                    &pos,
+                                    false,
+                                    left_width - 76.0,
+                                );
+                                readonly_row(
+                                    ui,
+                                    self.tr("句柄:", "Handle:"),
+                                    &hwnd,
+                                    false,
+                                    left_width - 76.0,
+                                );
+                                readonly_row(
+                                    ui,
+                                    self.tr("类型:", "Class:"),
+                                    &class,
+                                    false,
+                                    left_width - 76.0,
+                                );
+                                readonly_row(
+                                    ui,
+                                    self.tr("标题:", "Title:"),
+                                    &title,
+                                    true,
+                                    left_width - 76.0,
+                                );
+                                readonly_row(
+                                    ui,
+                                    self.tr("密码:", "Password:"),
+                                    self.tr("未读取 · 保护隐私", "Not read · private"),
+                                    false,
+                                    left_width - 76.0,
+                                );
+                            });
+                    });
+                },
+            );
+            ui.vertical(|ui| {
+                ui.add_space(13.0);
+                self.crosshair(ui, PickKind::Window);
+            });
+        });
+    }
+    fn request_content(&mut self) {
+        let kind = match self.detail_tab {
+            3 | 4 => DetailKind::Legacy(self.legacy_frame),
+            6 => DetailKind::Menu,
+            _ => DetailKind::Content,
+        };
+        self.queue_detail(kind);
+    }
+    fn detail_window(&mut self, ui: &mut egui::Ui) {
+        let labels = [
+            self.tr("常规", "General"),
+            "ListV",
+            "TreeV",
+            "IE",
+            "IE2",
+            "RichEdit",
+            self.tr("菜单", "Menu"),
+            self.tr("关于", "About"),
+        ];
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for (i, label) in labels.iter().enumerate() {
+                if ui.selectable_label(self.detail_tab == i, *label).clicked() {
+                    self.detail_tab = i;
+                    self.tree_expanded = true;
+                    self.rebuild_rows();
+                }
+            }
+        });
+        ui.separator();
+        if self.detail_tab == 7 {
+            self.about_contents(ui);
+            return;
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.selected.is_some() && !self.reading_details,
+                    egui::Button::new(self.tr("读取详情", "Read details")),
+                )
+                .clicked()
+            {
+                self.request_content();
+            }
+            if matches!(self.detail_tab, 0 | 1 | 2 | 6) {
+                ui.label(format!(
+                    "{} {}",
+                    self.tr("项目数:", "Items:"),
+                    self.content_rows.len()
+                ));
+            }
+            if self.reading_details {
+                ui.spinner();
+            }
+        });
+        if !self.content_warning.is_empty() {
+            ui.label(
+                RichText::new(&self.content_warning)
+                    .small()
+                    .color(Color32::from_rgb(146, 76, 28)),
+            );
+        }
+        match self.detail_tab {
+            0 => {
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label("Listbox/Combobox");
+                    self.content_table(ui, false);
+                });
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    self.icon_contents(ui);
+                });
+                if let Some(info) = self.info.clone() {
+                    egui::CollapsingHeader::new(self.tr("窗口属性", "Window properties")).show(
+                        ui,
+                        |ui| {
+                            let report = full_report(&info);
+                            let mut report_view = report.as_str();
+                            ui.add(
+                                egui::TextEdit::multiline(&mut report_view)
+                                    .desired_rows(8)
+                                    .desired_width(f32::INFINITY),
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.button(self.tr("复制报告", "Copy report")).clicked() {
+                                    ui.ctx().copy_text(full_report(&info));
+                                }
+                                if ui.button("JSON").clicked() {
+                                    self.export(&info, true);
+                                }
+                            });
+                        },
                     );
-                    if parents.contains(&node.hwnd) {
-                        let arrow = if self.collapsed.contains(&node.hwnd) && !searching {
-                            "+"
+                }
+            }
+            1 | 2 => {
+                if self.detail_tab == 2 {
+                    ui.horizontal(|ui| {
+                        if ui.button(self.tr("全部展开", "Expand all")).clicked() {
+                            self.tree_expanded = true;
+                        }
+                        if ui.button(self.tr("收缩所有", "Collapse all")).clicked() {
+                            self.tree_expanded = false;
+                        }
+                    });
+                }
+                self.content_table(ui, self.detail_tab == 2);
+            }
+            3 => self.ie_contents(ui, false),
+            4 => self.ie_contents(ui, true),
+            5 => {
+                ui.small(self.tr("导出为文本 RTF；不保留原控件样式或嵌入对象。","Exports text-only RTF; original styling and embedded objects are not preserved."));
+                let mut text = self.content_text.as_str();
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(18)
+                        .desired_width(f32::INFINITY),
+                );
+                self.content_actions(ui);
+            }
+            6 => {
+                self.content_table(ui, true);
+            }
+            _ => {}
+        }
+    }
+    fn content_actions(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button(self.tr("复制全部", "Copy all")).clicked() {
+                ui.ctx().copy_text(self.content_text.clone());
+            }
+            if ui.button(self.tr("保存全部", "Save all")).clicked() {
+                if self.detail_tab == 5 {
+                    self.save_named(
+                        coralspynext::formats::text_to_rtf(&self.content_text),
+                        "rtf",
+                    );
+                } else {
+                    self.save_string(self.content_text.clone());
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.selected_row.is_some(),
+                    egui::Button::new(self.tr("复制当前", "Copy current")),
+                )
+                .clicked()
+            {
+                if let Some(row) = self.selected_row.and_then(|i| self.content_rows.get(i)) {
+                    ui.ctx()
+                        .copy_text(format!("{}\t{}\t{}", row.1, row.2, row.3));
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.selected_row.is_some(),
+                    egui::Button::new(self.tr("保存当前", "Save current")),
+                )
+                .clicked()
+            {
+                if let Some(row) = self.selected_row.and_then(|i| self.content_rows.get(i)) {
+                    self.save_string(format!("{}\t{}\t{}", row.1, row.2, row.3));
+                }
+            }
+        });
+    }
+    fn content_table(&mut self, ui: &mut egui::Ui, tree: bool) {
+        self.content_actions(ui);
+        if self.detail_tab == 1 {
+            ui.small(self.tr("预览前 100 条；保存全部已捕获条目。未暴露或虚拟化的数据不会被补造。","Preview: first 100 items. Save exports all captured items; unexposed or virtualized items are not invented."));
+        }
+        egui::ScrollArea::both()
+            .id_salt(("content", self.detail_tab))
+            .max_height(240.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.detail_tab == 1 {
+                    let headers = self
+                        .content_snapshot
+                        .as_ref()
+                        .map(coralspynext::content_view::list_headers)
+                        .unwrap_or_default();
+                    let structured_cells = self
+                        .content_snapshot
+                        .as_ref()
+                        .map(coralspynext::content_view::list_cells)
+                        .unwrap_or_default();
+                    egui::Grid::new("listview_cells")
+                        .striped(true)
+                        .spacing([14.0, 5.0])
+                        .show(ui, |ui| {
+                            if headers.is_empty() {
+                                ui.strong(self.tr("项目", "Item"));
+                                ui.strong(self.tr("值", "Value"));
+                            } else {
+                                for header in &headers {
+                                    ui.strong(header);
+                                }
+                            }
+                            ui.end_row();
+                            for (i, (_, name, _, value)) in
+                                self.content_rows.iter().enumerate().take(100)
+                            {
+                                let cells: Vec<&str> = if let Some(row) =
+                                    structured_cells.get(i).filter(|row| !row.is_empty())
+                                {
+                                    // Keep empty cells and literal tabs within a cell intact.
+                                    row.iter().map(String::as_str).collect()
+                                } else if headers.is_empty() || headers.len() > 1 {
+                                    vec![name.as_str(), value.as_str()]
+                                } else {
+                                    vec![name.as_str()]
+                                };
+                                for (column, cell) in cells.iter().enumerate() {
+                                    if column == 0 {
+                                        if ui
+                                            .selectable_label(self.selected_row == Some(i), *cell)
+                                            .clicked()
+                                        {
+                                            self.selected_row = Some(i);
+                                        }
+                                    } else {
+                                        ui.add(egui::Label::new(*cell).selectable(true));
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    return;
+                }
+                for (i, (depth, name, role, value)) in
+                    self.content_rows
+                        .iter()
+                        .enumerate()
+                        .take(if self.detail_tab == 1 {
+                            100
                         } else {
-                            "−"
-                        };
-                        ui.painter().text(
-                            disclosure.center(),
-                            Align2::CENTER_CENTER,
-                            arrow,
-                            FontId::monospace(15.0),
-                            muted(self.dark),
-                        );
+                            usize::MAX
+                        })
+                {
+                    if tree && !self.tree_expanded && *depth > 0 {
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                        if tree {
+                            ui.add_space((*depth).min(12) as f32 * 12.0);
+                        }
                         if ui
-                            .interact(
-                                disclosure,
-                                ui.id().with(("collapse", node.hwnd)),
-                                Sense::click(),
+                            .selectable_label(
+                                self.selected_row == Some(i),
+                                format!("{name}    {role}    {value}"),
                             )
                             .clicked()
                         {
-                            collapse_toggle = Some(node.hwnd);
+                            self.selected_row = Some(i);
+                        }
+                    });
+                }
+                if self.content_rows.is_empty() {
+                    ui.label(self.tr("暂无数据。点击“读取详情”。", "No data. Click Read details."));
+                }
+            });
+    }
+    fn ie_contents(&mut self, ui: &mut egui::Ui, more: bool) {
+        ui.small(self.tr(
+            "页面快照；导航加载完成后可再次读取。",
+            "Page snapshot. Read again after navigation finishes loading.",
+        ));
+        let snapshot = self.legacy_snapshot.clone();
+        if !more {
+            egui::Grid::new("ie_fields")
+                .num_columns(2)
+                .spacing([6.0, 4.0])
+                .show(ui, |ui| {
+                    readonly_row(
+                        ui,
+                        self.tr("位置:", "Location:"),
+                        snapshot.as_ref().map(|s| s.location.as_str()).unwrap_or(""),
+                        false,
+                        ui.available_width() - 70.0,
+                    );
+                    readonly_row(
+                        ui,
+                        self.tr("标题:", "Title:"),
+                        snapshot.as_ref().map(|s| s.title.as_str()).unwrap_or(""),
+                        false,
+                        ui.available_width() - 70.0,
+                    );
+                    readonly_row(
+                        ui,
+                        self.tr("程序:", "Application:"),
+                        snapshot
+                            .as_ref()
+                            .map(|s| s.application.as_str())
+                            .unwrap_or(""),
+                        false,
+                        ui.available_width() - 70.0,
+                    );
+                });
+            ui.horizontal(|ui| {
+                ui.label(self.tr("框架:", "Frame:"));
+                let old = self.legacy_frame;
+                let label = self
+                    .legacy_frame
+                    .and_then(|i| snapshot.as_ref().and_then(|s| s.frames.get(i)).cloned())
+                    .unwrap_or_else(|| self.tr("最上", "Top").to_string());
+                egui::ComboBox::from_id_salt("ie_frame")
+                    .selected_text(label)
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.legacy_frame,
+                            None,
+                            if self.english { "Top" } else { "最上" },
+                        );
+                        if let Some(s) = &snapshot {
+                            for (i, name) in s.frames.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut self.legacy_frame,
+                                    Some(i),
+                                    format!("{i}: {name}"),
+                                );
+                            }
+                        }
+                    });
+                if ui.small_button(self.tr("最上", "Top")).clicked() {
+                    self.legacy_frame = None;
+                }
+                if old != self.legacy_frame {
+                    self.legacy_snapshot = None;
+                    self.queue_detail(DetailKind::Legacy(self.legacy_frame));
+                }
+                if ui.small_button(self.tr("更多 >>", "More >>")).clicked() {
+                    self.detail_tab = 4;
+                }
+            });
+            ui.horizontal(|ui| {
+                for (action, zh, en) in [
+                    (LegacyAction::Back, "返回", "Back"),
+                    (LegacyAction::Forward, "前进", "Forward"),
+                    (LegacyAction::Stop, "停止", "Stop"),
+                    (LegacyAction::Refresh, "刷新", "Refresh"),
+                    (LegacyAction::Home, "主页", "Home"),
+                ] {
+                    if ui
+                        .add_enabled(
+                            snapshot.is_some() && !self.reading_details,
+                            egui::Button::new(self.tr(zh, en)).small(),
+                        )
+                        .clicked()
+                    {
+                        self.queue_detail(DetailKind::Action(self.legacy_frame, action));
+                    }
+                }
+                if ui.small_button(self.tr("复制", "Copy")).clicked() {
+                    if let Some(s) = &snapshot {
+                        ui.ctx().copy_text(s.source.clone());
+                    }
+                }
+                if ui.small_button(self.tr("保存 HTML", "Save HTML")).clicked() {
+                    if let Some(s) = &snapshot {
+                        self.save_named(s.source.clone(), "html");
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(self.tr("高亮显示:", "Highlight:"));
+                ui.add(egui::TextEdit::singleline(&mut self.highlight_needle).desired_width(210.0));
+                if ui
+                    .add_enabled(
+                        snapshot.is_some()
+                            && !self.highlight_needle.is_empty()
+                            && !self.reading_details,
+                        egui::Button::new(self.tr("高亮显示", "Highlight")),
+                    )
+                    .on_hover_text(self.tr(
+                        "会更改目标页面文字格式，效果可能保留到刷新页面。",
+                        "Changes the target page formatting; effects may remain until reload.",
+                    ))
+                    .clicked()
+                {
+                    self.queue_detail(DetailKind::Highlight {
+                        frame: self.legacy_frame,
+                        needle: self.highlight_needle.clone(),
+                        text: self.settings.highlight_text,
+                        background: self.settings.highlight_background,
+                        bold: self.settings.highlight_bold,
+                    });
+                }
+            });
+            ui.label(self.tr("源代码:", "Source:"));
+            let mut source = snapshot.as_ref().map(|s| s.source.as_str()).unwrap_or("");
+            egui::ScrollArea::both()
+                .id_salt("ie_source")
+                .max_height(195.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut source)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(12),
+                    );
+                });
+        } else {
+            ui.horizontal(|ui| {
+                let filters = [
+                    self.tr("所有链接", "All links"),
+                    self.tr("外部链接", "External links"),
+                    self.tr("图片", "Images"),
+                    "Flash",
+                ];
+                egui::ComboBox::from_id_salt("ie_links_filter")
+                    .selected_text(filters[self.legacy_filter])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in filters.iter().enumerate() {
+                            if ui
+                                .selectable_value(&mut self.legacy_filter, i, *name)
+                                .clicked()
+                            {
+                                self.legacy_link = None;
+                            }
+                        }
+                    });
+                ui.small(self.tr("[双击复制到剪贴板]", "[Double-click to copy]"));
+                if ui.small_button(self.tr("更多 >>", "More >>")).clicked() {
+                    self.legacy_more = !self.legacy_more;
+                }
+            });
+            egui::ScrollArea::both()
+                .id_salt("ie_links")
+                .max_height(130.0)
+                .min_scrolled_height(85.0)
+                .show(ui, |ui| {
+                    if let Some(s) = &snapshot {
+                        for (i, link) in s.links.iter().enumerate() {
+                            let show = match self.legacy_filter {
+                                0 => matches!(link.kind.as_str(), "link" | "external"),
+                                1 => link.kind == "external",
+                                2 => link.kind == "image",
+                                _ => link.kind == "flash",
+                            };
+                            if !show {
+                                continue;
+                            }
+                            let response = ui.selectable_label(
+                                self.legacy_link == Some(i),
+                                format!("{}  {}", link.url, link.text),
+                            );
+                            if response.clicked() {
+                                self.legacy_link = Some(i);
+                            }
+                            if response.double_clicked() {
+                                ui.ctx().copy_text(link.url.clone());
+                            }
                         }
                     }
-                    let painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
-                        egui::pos2(x + 21.0, rect.top()),
-                        rect.max - Vec2::new(8.0, 0.0),
-                    ));
-                    let title = if node.title.trim().is_empty() {
-                        "（无窗口标题）"
-                    } else {
-                        node.title.trim()
-                    };
-                    painter.text(
-                        egui::pos2(x + 21.0, rect.top() + 8.0),
-                        Align2::LEFT_TOP,
-                        title,
-                        FontId::proportional(13.0),
-                        if node.visible {
-                            ui.visuals().text_color()
-                        } else {
-                            muted(self.dark)
-                        },
-                    );
-                    painter.text(
-                        egui::pos2(x + 21.0, rect.top() + 29.0),
-                        Align2::LEFT_TOP,
-                        format!("{}  ·  PID {}", node.class_name, node.pid),
-                        FontId::proportional(10.5),
-                        muted(self.dark),
-                    );
-                    if response.clicked()
-                        && !disclosure
-                            .contains(response.interact_pointer_pos().unwrap_or(egui::Pos2::ZERO))
-                    {
-                        selection = Some(node.hwnd);
-                    }
-                    response.on_hover_text(format!(
-                        "{}\n{}\n{}\nPID {} · {}",
-                        title,
-                        node.class_name,
-                        hwnd_text(node.hwnd),
-                        node.pid,
-                        if node.visible { "可见" } else { "隐藏" }
-                    ));
-                }
+                });
+            ui.horizontal(|ui|{
+                let selected=self.legacy_link.and_then(|i|snapshot.as_ref().and_then(|s|s.links.get(i)));
+                if ui.add_enabled(selected.is_some(),egui::Button::new(self.tr("复制 URL","Copy URL"))).clicked(){if let Some(link)=selected{ui.ctx().copy_text(link.url.clone());}}
+                if ui.add_enabled(selected.is_some()&&!self.exporting,egui::Button::new(self.tr("下载","Download"))).on_hover_text(self.tr("保存所选 HTTP(S) 资源。无登录凭证，不下载可执行类型，不跟随重定向。","Save the selected HTTP(S) resource. No credentials, executable types, or redirects.")).clicked(){if let Some(link)=selected{self.cancel_pick();let id=self.id();self.exporting=true;self.pending_export=Some(Job::Download{id,url:link.url.clone()});}}
+                if ui.button(self.tr("保存链接","Save links")).clicked(){if let Some(s)=&snapshot{self.save_string(s.links.iter().map(|l|format!("{}\t{}\t{}",l.kind,l.url,l.text)).collect::<Vec<_>>().join("\n"));}}
             });
-        if let Some(hwnd) = collapse_toggle {
-            if !self.collapsed.remove(&hwnd) {
-                self.collapsed.insert(hwnd);
+            if self.legacy_more {
+                if let Some(snapshot) = &snapshot {
+                    ui.group(|ui| {
+                        ui.label(format!(
+                            "{}  ·  links {}  ·  forms {}  ·  frames {}",
+                            hwnd_text(snapshot.hwnd),
+                            snapshot.links.len(),
+                            snapshot.forms.len(),
+                            snapshot.frames.len()
+                        ));
+                        if let Some(link) = self.legacy_link.and_then(|i| snapshot.links.get(i)) {
+                            ui.label(format!("{}: {}", link.kind, link.url));
+                            ui.label(&link.text);
+                        }
+                        if ui
+                            .small_button(self.tr("保存详情 JSON", "Save details JSON"))
+                            .clicked()
+                        {
+                            match serde_json::to_string_pretty(snapshot) {
+                                Ok(text) => self.save_named(text, "json"),
+                                Err(error) => self.notify(error.to_string(), true),
+                            }
+                        }
+                    });
+                }
             }
+            ui.separator();
+            ui.label(self.tr("表单元素:", "Form elements:"));
+            egui::ScrollArea::both()
+                .id_salt("ie_forms")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("ie_forms_table")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong(self.tr("类型", "Type"));
+                            ui.strong(self.tr("名称", "Name"));
+                            ui.strong(self.tr("值", "Value"));
+                            ui.end_row();
+                            if let Some(s) = &snapshot {
+                                for form in &s.forms {
+                                    ui.label(&form.kind);
+                                    ui.label(if form.protected {
+                                        "[受保护 / Protected]"
+                                    } else {
+                                        &form.name
+                                    });
+                                    let value = if form.protected {
+                                        "[密码受保护 / Password protected]"
+                                    } else {
+                                        &form.value
+                                    };
+                                    let response = ui.add(egui::Label::new(value).selectable(true));
+                                    if response.double_clicked() {
+                                        ui.ctx().copy_text(value.to_string());
+                                    }
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
         }
-        if let Some(hwnd) = selection {
-            // An explicit click uses the latest tree snapshot, even if its HWND
-            // equals a stale prior selection. Recheck keeps the old identity.
-            let expected = self
-                .nodes
-                .iter()
-                .find(|node| node.hwnd == hwnd)
-                .map(|node| (node.pid, node.class_name.clone()));
-            self.inspect_target(hwnd, expected);
+        if snapshot.is_none() {
+            ui.label(self.tr("选择旧版 IE / MSHTML 窗口后点击“读取详情”。Chromium 页面不支持此旧接口。","Select a legacy IE / MSHTML window and click Read details. Chromium does not expose this legacy interface."));
         }
     }
-    fn window_details(&mut self, ui: &mut egui::Ui) {
-        if self.inspecting {
-            ui.add_space(70.0);
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("正在检查目标窗口…");
-            });
-            if let Some(hwnd) = self.selected {
-                ui.monospace(hwnd_text(hwnd));
-            }
-            return;
-        }
-        if let Some(error) = self.inspection_error.clone() {
-            ui.add_space(30.0);
-            ui.heading("暂时无法读取");
-            ui.add_space(10.0);
-            ui.colored_label(error_color(self.dark), error);
+    fn about_contents(&self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(15.0);
+            ui.heading("CoralSpyNext");
+            ui.label(format!(
+                "v{} · Rust · Windows 11 x64",
+                env!("CARGO_PKG_VERSION")
+            ));
             ui.add_space(8.0);
-            ui.label("目标可能已关闭，或受到 Windows 权限与应用保护限制。可重新拾取其他窗口。");
-            if ui.button("重试所选窗口").clicked() {
-                if let Some(hwnd) = self.selected {
-                    self.select(hwnd);
-                }
-            }
-            return;
-        }
-        let Some(info) = self.info.clone() else {
-            ui.add_space(70.0);
-            draw_empty_window(ui, self.dark);
-            ui.add_space(18.0);
-            ui.heading("选择一个窗口，开始洞察");
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(
-                    "在左侧浏览窗口树，或点击「拾取窗口」\n读取句柄、进程、位置与样式信息。",
-                )
-                .color(muted(self.dark)),
-            );
-            ui.add_space(20.0);
-            ui.label(
-                RichText::new("Ctrl + F  搜索窗口     F5  刷新列表")
-                    .size(12.0)
-                    .color(muted(self.dark)),
-            );
-            return;
-        };
-        ui.label(
-            RichText::new("所选窗口 / SNAPSHOT")
-                .size(10.5)
-                .color(accent_text(self.dark)),
-        );
+            ui.label(self.tr(
+                "经典 CoralSpy 界面的独立现代重写",
+                "An independent modern rewrite of the classic CoralSpy interface",
+            ));
+            ui.label(self.tr(
+                "保留原版窗口布局与操作习惯。",
+                "Preserves the classic window layout and interaction.",
+            ));
+        });
         ui.add_space(8.0);
-        ui.add(
-            egui::Label::new(
-                RichText::new(nonempty(&info.title, "无窗口标题"))
-                    .size(21.0)
-                    .strong(),
-            )
-            .wrap(),
-        );
-        ui.label(
-            RichText::new(nonempty(&info.class_name, "未知窗口类"))
-                .monospace()
-                .color(muted(self.dark)),
-        );
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            pill(
-                ui,
-                if info.visible { "可见" } else { "隐藏" },
-                self.dark,
-                info.visible,
-            );
-            pill(
-                ui,
-                if info.enabled {
-                    "已启用"
-                } else {
-                    "已禁用"
-                },
-                self.dark,
-                false,
-            );
-            if info.minimized {
-                pill(ui, "已最小化", self.dark, false);
-            }
-            if info.maximized {
-                pill(ui, "已最大化", self.dark, false);
-            }
-            pill(
-                ui,
-                if info.is_unicode { "Unicode" } else { "ANSI" },
-                self.dark,
-                false,
+        ui.label("Original CoralSpy 1.0: Copyright 2003–2004 Coral Studio. 2004-07-31.");
+        ui.label(self.tr("CoralSpyNext 为独立重写，原作名称与作者归原作者所有。","CoralSpyNext is an independent rewrite; original names and credits remain with their authors."));
+        ui.horizontal(|ui| {
+            ui.hyperlink_to("GitHub", "https://github.com/Antman2023/CoralSpyNext");
+            ui.hyperlink_to(
+                "Issues",
+                "https://github.com/Antman2023/CoralSpyNext/issues",
             );
         });
         ui.add_space(14.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("复制报告").clicked() {
-                ui.ctx().copy_text(full_report(&info));
-                self.notify("窗口报告已复制", false);
-            }
-            if ui
-                .add_enabled(!self.exporting, egui::Button::new("导出 JSON"))
-                .clicked()
-            {
-                self.export(&info, true);
-            }
-            if ui
-                .add_enabled(!self.exporting, egui::Button::new("导出文本"))
-                .clicked()
-            {
-                self.export(&info, false);
-            }
-            if ui.small_button("重新检查").clicked() {
-                self.select(info.hwnd);
-            }
-        });
-        section(ui, "标识与进程", self.dark);
-        egui::Grid::new("identity_grid")
-            .num_columns(2)
-            .spacing([14.0, 10.0])
-            .striped(false)
-            .show(ui, |ui| {
-                data_row(ui, "窗口句柄", &hwnd_text(info.hwnd), true, self.dark);
-                data_row(ui, "父窗口", &hwnd_text(info.parent), true, self.dark);
-                data_row(
-                    ui,
-                    "进程名称",
-                    nonempty(&info.process_name, "不可用 / 无读取权限"),
-                    false,
-                    self.dark,
-                );
-                data_row(ui, "进程 PID", &info.pid.to_string(), true, self.dark);
-                data_row(ui, "线程 TID", &info.tid.to_string(), true, self.dark);
-            });
-        section(ui, "尺寸与坐标", self.dark);
-        egui::Grid::new("geometry_grid")
-            .num_columns(2)
-            .spacing([14.0, 10.0])
-            .show(ui, |ui| {
-                data_row(
-                    ui,
-                    "屏幕位置",
-                    &format!("X {}    Y {}", info.rect.left, info.rect.top),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "窗口大小",
-                    &format!("{} × {} px", info.rect.width(), info.rect.height()),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "窗口边界",
-                    &format!(
-                        "({}, {}) → ({}, {})",
-                        info.rect.left, info.rect.top, info.rect.right, info.rect.bottom
-                    ),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "客户区大小",
-                    &format!(
-                        "{} × {} px",
-                        info.client_rect.width(),
-                        info.client_rect.height()
-                    ),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "客户区边界",
-                    &format!(
-                        "({}, {}) → ({}, {})",
-                        info.client_rect.left,
-                        info.client_rect.top,
-                        info.client_rect.right,
-                        info.client_rect.bottom
-                    ),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "窗口 DPI",
-                    &if info.dpi == 0 {
-                        "不可用".into()
-                    } else {
-                        format!("{}  ·  {:.0}%", info.dpi, info.dpi as f32 / 96.0 * 100.0)
-                    },
-                    true,
-                    self.dark,
-                );
-            });
-        section(ui, "窗口样式", self.dark);
-        egui::Grid::new("style_grid")
-            .num_columns(2)
-            .spacing([14.0, 10.0])
-            .show(ui, |ui| {
-                data_row(
-                    ui,
-                    "Style",
-                    &format!("0x{:08X}", info.style),
-                    true,
-                    self.dark,
-                );
-                data_row(
-                    ui,
-                    "ExStyle",
-                    &format!("0x{:08X}", info.ex_style),
-                    true,
-                    self.dark,
-                );
-            });
-        ui.add_space(9.0);
-        ui.label(
-            RichText::new(style_names(info.style, info.ex_style))
-                .size(11.0)
-                .color(muted(self.dark)),
-        );
-        section(ui, "读取说明", self.dark);
-        ui.label(
-            RichText::new(&info.text_status)
-                .size(12.0)
-                .color(muted(self.dark)),
-        );
-        ui.add_space(7.0);
-        ui.label(RichText::new("仅显示系统可提供的标题元数据。不会读取密码、输入框内容，不使用钩子或进程注入。坐标使用像素；受保护窗口可能只提供部分字段。").size(11.5).color(muted(self.dark)));
-        ui.add_space(18.0);
+        ui.group(|ui| { ui.label(self.tr("可查看详情的控件类型", "Supported control categories")); ui.label("Listbox / Combobox / ListView / TreeView / RichEdit\nUI Automation / Win32 menus / Legacy IE-MSHTML"); });
+        ui.add_space(10.0);
+        ui.label(self.tr("密码始终保护。受权限、应用实现或超时影响时，明确显示不可用。不会自动提权、注入进程或记录键盘。", "Passwords remain protected. Permission, provider and timeout limits are shown explicitly. No automatic elevation, injection or key logging."));
     }
-    fn colors_page(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("屏幕取色");
-                ui.label(
-                    RichText::new("捕捉屏幕像素，留下刚刚发现的颜色。 ")
-                        .size(12.5)
-                        .color(muted(self.dark)),
-                );
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(self.picker.is_none(), primary_button("＋  开始取色"))
-                    .clicked()
-                {
-                    self.begin_pick(PickKind::Color);
-                }
-            });
+    fn color_window(&mut self, ui: &mut egui::Ui) {
+        let sample = self.picker.as_ref().and_then(|p| p.sample).or(self.color);
+        let [r, g, b] = sample.map(|c| [c.r, c.g, c.b]).unwrap_or(self.color_edit);
+        let colorref = r as u32 | ((g as u32) << 8) | ((b as u32) << 16);
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            let mut swatch = [r, g, b];
+            if ui
+                .color_edit_button_srgb(&mut swatch)
+                .on_hover_text(self.tr("选择颜色", "Choose color"))
+                .changed()
+            {
+                self.cancel_pick();
+                self.color_edit = swatch;
+                self.color = None;
+            }
+            color_field(ui, "DEC", &colorref.to_string(), 92.0);
+            color_field(ui, "HEX", &format!("0x{colorref:06X}"), 95.0);
+            color_field(ui, "HTML", &format!("#{r:02X}{g:02X}{b:02X}"), 92.0);
+            color_field(ui, "Red", &r.to_string(), 39.0);
+            color_field(ui, "Green", &g.to_string(), 39.0);
+            color_field(ui, "Blue", &b.to_string(), 39.0);
+            ui.add_space((ui.available_width() - 48.0).max(0.0));
+            self.crosshair(ui, PickKind::Color);
         });
-        ui.add_space(20.0);
-        self.picker_banner(ui);
-        egui::ScrollArea::vertical().id_salt("colors").auto_shrink([false, false]).show(ui, |ui| {
-            let sample = self.picker.as_ref().and_then(|p| p.sample).or(self.color);
-            egui::Frame::default().fill(surface(self.dark)).corner_radius(14).inner_margin(24).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                if let Some(sample) = sample {
-                    ui.horizontal_top(|ui| {
-                        let side = (ui.available_width() * 0.32).clamp(135.0, 220.0);
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
-                        ui.painter().rect_filled(rect, 12.0, Color32::from_rgb(sample.r, sample.g, sample.b));
-                        ui.add_space(24.0);
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(if self.picker.is_some() { "实时预览" } else { "已采集颜色" }).size(11.0).color(muted(self.dark)));
-                            ui.add_space(12.0);
-                            ui.label(RichText::new(sample.hex()).size(34.0).monospace().strong());
-                            ui.label(RichText::new(sample.rgb()).size(16.0).monospace());
-                            ui.add_space(14.0);
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("复制 HEX").clicked() { ui.ctx().copy_text(sample.hex()); self.notify("HEX 颜色值已复制", false); }
-                                if ui.button("复制 RGB").clicked() { ui.ctx().copy_text(sample.rgb()); self.notify("RGB 颜色值已复制", false); }
-                            });
-                            ui.add_space(14.0);
-                            ui.label(RichText::new(format!("屏幕坐标  X {}  ·  Y {}", sample.x, sample.y)).size(12.0).color(muted(self.dark)));
-                            ui.label(RichText::new(format!("Win32 COLORREF  0x{:08X}", sample.colorref())).size(11.0).monospace().color(muted(self.dark)));
-                        });
-                    });
-                } else {
-                    ui.set_min_height(210.0);
-                    ui.add_space(35.0); ui.heading("还没有采集颜色"); ui.add_space(12.0);
-                    ui.label("点击「开始取色」，移动鼠标到屏幕上的任意位置。");
-                    ui.label(RichText::new("按 Ctrl 锁定颜色，Esc 随时取消。 ").color(muted(self.dark)));
-                }
-            });
-            ui.add_space(22.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("最近采集").size(16.0).strong());
-                ui.label(RichText::new(format!("{} / 24", self.color_history.len())).size(11.0).color(muted(self.dark)));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add_enabled(!self.color_history.is_empty(), egui::Button::new("清空历史").small()).clicked() { self.color_history.clear(); }
+    }
+    fn options_window(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(self.tr("热键", "Hotkeys"));
+            let action_names = [
+                self.tr("显示主窗口", "Show main window"),
+                self.tr("显示颜色拾取器", "Show color picker"),
+                self.tr("准星－按两次", "Crosshair — press twice"),
+            ];
+            egui::ComboBox::from_id_salt("hotkey_action")
+                .selected_text(action_names[self.hotkey_edit])
+                .show_ui(ui, |ui| {
+                    for (i, name) in action_names.iter().enumerate() {
+                        ui.selectable_value(&mut self.hotkey_edit, i, *name);
+                    }
                 });
-            });
-            ui.add_space(10.0);
-            if self.color_history.is_empty() { ui.label(RichText::new("颜色记录仅保存在本次会话中。").size(12.0).color(muted(self.dark))); }
-            let mut picked = None;
-            ui.horizontal_wrapped(|ui| {
-                for sample in &self.color_history {
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(82.0, 84.0), Sense::click());
-                    ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, Vec2::new(76.0, 53.0)), 8.0, Color32::from_rgb(sample.r, sample.g, sample.b));
-                    ui.painter().text(rect.min + Vec2::new(0.0, 60.0), Align2::LEFT_TOP, sample.hex(), FontId::monospace(12.0), ui.visuals().text_color());
-                    if response.clicked() { picked = Some(*sample); }
-                    response.on_hover_text(format!("{} · ({}, {})\n点击查看", sample.rgb(), sample.x, sample.y));
+            let mut binding = self.settings_draft.hotkeys[self.hotkey_edit];
+            ui.horizontal(|ui| {
+                for (mask, label) in [(2, "Ctrl"), (1, "Alt"), (4, "Shift"), (8, "Win")] {
+                    let mut on = binding.modifiers & mask != 0;
+                    if ui.checkbox(&mut on, label).changed() {
+                        if on {
+                            binding.modifiers |= mask;
+                        } else {
+                            binding.modifiers &= !mask;
+                        }
+                    }
                 }
             });
-            if let Some(sample) = picked { self.color = Some(sample); }
-            ui.add_space(20.0);
-            ui.label(RichText::new("数值来自 Windows 桌面像素采样。HDR、色彩管理与受保护内容可能影响屏幕显示和采样结果。").size(11.5).color(muted(self.dark)));
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("hotkey_key")
+                    .selected_text(key_name(binding.key))
+                    .width(65.0)
+                    .show_ui(ui, |ui| {
+                        for key in (0x30..=0x39).chain(0x41..=0x5a).chain(0x70..=0x87) {
+                            ui.selectable_value(&mut binding.key, key, key_name(key));
+                        }
+                    });
+                ui.checkbox(
+                    &mut self.settings_draft.hotkeys_enabled,
+                    "启用热键 / Enable hotkeys",
+                );
+            });
+            self.settings_draft.hotkeys[self.hotkey_edit] = binding;
+            ui.horizontal(|ui| {
+                if ui.button(self.tr("注册热键", "Register")).clicked() {
+                    self.test_hotkeys(true);
+                }
+                if ui.button(self.tr("取消热键", "Unregister")).clicked() {
+                    self.test_hotkeys(false);
+                }
+            });
         });
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(self.tr("常规", "General"));
+            ui.horizontal(|ui| {
+                ui.label(self.tr("语言:", "Language:"));
+                ui.selectable_value(&mut self.settings_draft.language, "zh-CN".into(), "Chinese");
+                ui.selectable_value(&mut self.settings_draft.language, "en-US".into(), "English");
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.settings_draft.dark, "Dark / 深色");
+                ui.checkbox(&mut self.settings_draft.always_on_top, "置顶 / On top");
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.settings_draft.tray_enabled, "托盘 / Tray");
+                ui.checkbox(
+                    &mut self.settings_draft.minimize_to_tray,
+                    "最小化到托盘 / Minimize to tray",
+                );
+            });
+        });
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(self.tr("IE 高亮显示", "IE highlight"));
+            ui.horizontal(|ui| {
+                ui.label(self.tr("文字:", "Text:"));
+                ui.color_edit_button_srgb(&mut self.settings_draft.highlight_text);
+                ui.label(self.tr("背景:", "Background:"));
+                ui.color_edit_button_srgb(&mut self.settings_draft.highlight_background);
+                ui.checkbox(&mut self.settings_draft.highlight_bold, "粗体 / Bold");
+            });
+            let mut text = RichText::new(self.tr("这就是预览效果。", "This is a preview."))
+                .color(Color32::from_rgb(
+                    self.settings_draft.highlight_text[0],
+                    self.settings_draft.highlight_text[1],
+                    self.settings_draft.highlight_text[2],
+                ))
+                .background_color(Color32::from_rgb(
+                    self.settings_draft.highlight_background[0],
+                    self.settings_draft.highlight_background[1],
+                    self.settings_draft.highlight_background[2],
+                ));
+            if self.settings_draft.highlight_bold {
+                text = text.strong();
+            }
+            ui.label(text);
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(self.tr("确定", "OK")).clicked() && self.apply_settings(ui.ctx()) {
+                self.options_open = false;
+            }
+            if ui.button(self.tr("取消", "Cancel")).clicked() {
+                self.cancel_options();
+            }
+        });
+        if self.status_error {
+            ui.label(
+                RichText::new(&self.status)
+                    .small()
+                    .color(Color32::from_rgb(160, 40, 30)),
+            );
+        }
     }
-    fn about_page(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().id_salt("about").show(ui, |ui| {
-            ui.add_space(14.0); draw_brand(ui, 58.0); ui.add_space(20.0);
-            ui.label(RichText::new("CoralSpyNext").size(32.0).strong());
-            ui.label(RichText::new("熟悉的窗口检查，更清晰的现代体验。").size(16.0).color(muted(self.dark)));
-            ui.add_space(24.0);
-            about_card(ui, "为今天的 Windows 重写", "受经典 CoralSpy 启发的独立实现，采用 Rust、Win32 和 egui。面向 Windows 11 的 x64 桌面，支持高 DPI 与多显示器。", self.dark);
-            ui.add_space(12.0);
-            about_card(ui, "小而实用的工作台", "窗口树与快捷搜索；鼠标定位目标；句柄、进程、客户区、样式与 DPI 快照；JSON / 文本导出；屏幕取色及本次会话的颜色历史。", self.dark);
-            ui.add_space(12.0);
-            about_card(ui, "明确的安全边界", "所有检查在本机进行，无需联网。默认以普通权限运行，不自动提权，不安装服务。不读取密码或输入框，不记录键盘，不注入进程，不修改目标窗口。只有启动拾取时才轮询 Esc 和 Ctrl 键。", self.dark);
-            ui.add_space(12.0);
-            about_card(ui, "哪些内容可能读不到", "已关闭、受保护、更高权限或特殊渲染的窗口，可能无法完整读取。浏览器与现代应用中的某些控件没有独立 HWND；不会将网页 DOM 或绘制元素伪装为窗口。列表是有数量和时间上限的快照，刷新以获取最新状态。", self.dark);
-            ui.add_space(24.0);
-            ui.label(RichText::new("快捷键").size(15.0).strong()); ui.add_space(8.0);
-            ui.label("F5  刷新窗口列表\nCtrl + F  搜索窗口\nCtrl  锁定正在拾取的目标\nEsc  取消正在进行的拾取");
-            ui.add_space(20.0);
-            ui.label(RichText::new("CoralSpyNext 0.1.0  ·  Rust  ·  MIT").size(11.0).color(muted(self.dark)));
-        });
+    fn child_windows(&mut self, ctx: &egui::Context) {
+        if self.details_open {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("details"),
+                egui::ViewportBuilder::default()
+                    .with_title(self.tr("查看详情", "View details"))
+                    .with_inner_size([510.0, 460.0])
+                    .with_min_inner_size([490.0, 380.0]),
+                |ctx, _| {
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        self.details_open = false;
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("detail_outer")
+                            .show(ui, |ui| self.detail_window(ui));
+                    });
+                },
+            );
+        }
+        if self.color_open {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("colors"),
+                egui::ViewportBuilder::default()
+                    .with_title(self.tr("颜色拾取器", "Color picker"))
+                    .with_inner_size([620.0, 66.0])
+                    .with_min_inner_size([620.0, 66.0])
+                    .with_resizable(false),
+                |ctx, _| {
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        self.color_open = false;
+                        self.cancel_pick();
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| self.color_window(ui));
+                },
+            );
+        }
+        if self.options_open {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("options"),
+                egui::ViewportBuilder::default()
+                    .with_title(self.tr("选项", "Options"))
+                    .with_inner_size([420.0, 350.0])
+                    .with_resizable(false),
+                |ctx, _| {
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        self.cancel_options();
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("options_scroll")
+                            .show(ui, |ui| self.options_window(ui));
+                    });
+                },
+            );
+        }
     }
 }
 
 impl eframe::App for CoralSpyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.service_worker();
+        self.service_worker(ctx);
         self.service_picker(ctx);
-        if self.picker.is_none() {
-            if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
-                self.refresh();
-            }
-            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
-                self.page = Page::Windows;
-                self.focus_search = true;
-            }
+        self.service_desktop(ctx);
+        if self.picker.is_none() && ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+            self.refresh_target();
         }
-        self.header(ctx);
-        self.footer(ctx);
-        self.sidebar(ctx);
+        egui::TopBottomPanel::top("classic_toolbar")
+            .exact_height(35.0)
+            .show(ctx, |ui| self.main_toolbar(ui));
+        egui::TopBottomPanel::bottom("classic_status")
+            .exact_height(25.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if self.in_flight.is_some() {
+                        ui.add(egui::Spinner::new().size(12.0));
+                    }
+                    ui.add(egui::Label::new(RichText::new(&self.status).size(10.5)).truncate())
+                        .on_hover_text(&self.status);
+                });
+            });
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(background(self.dark))
-                    .inner_margin(egui::Margin::same(22)),
+                    .inner_margin(8)
+                    .fill(ctx.style().visuals.panel_fill),
             )
-            .show(ctx, |ui| match self.page {
-                Page::Windows => self.windows_page(ui),
-                Page::Colors => self.colors_page(ui),
-                Page::About => self.about_page(ui),
-            });
-        self.service_worker();
-        if self.in_flight.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            .show(ctx, |ui| self.main_panel(ui));
+        self.child_windows(ctx);
+        self.service_worker(ctx);
+        if self.in_flight.is_some() || self.picker.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(30));
         }
     }
+}
+
+fn readonly_row(ui: &mut egui::Ui, label: &str, value: &str, multiline: bool, width: f32) {
+    ui.label(label);
+    let mut view = value;
+    if multiline {
+        ui.add(
+            egui::TextEdit::multiline(&mut view)
+                .desired_width(width)
+                .desired_rows(2)
+                .font(egui::TextStyle::Body),
+        );
+    } else {
+        ui.add(egui::TextEdit::singleline(&mut view).desired_width(width));
+    }
+    ui.end_row();
+}
+fn color_field(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
+    let mut view = value;
+    let response = ui.add(egui::TextEdit::singleline(&mut view).desired_width(width));
+    response.on_hover_text(format!("{label}: {value}\nCtrl+C 复制 / copy"));
+}
+fn tool(ui: &mut egui::Ui, index: usize, tooltip: &str, active: bool) -> bool {
+    let response = ui.add_sized([25.0, 25.0], egui::Button::new("").selected(active));
+    let rect = response.rect.shrink(5.0);
+    let p = ui.painter().with_clip_rect(response.rect);
+    let ink = ui.visuals().text_color();
+    let stroke = Stroke::new(1.2_f32, ink);
+    let c = rect.center();
+    let line = |a: Vec2, b: Vec2| {
+        p.line_segment([rect.min + a, rect.min + b], stroke);
+    };
+    match index {
+        0 => {
+            for (offset, color) in [
+                (Vec2::new(4.0, 4.0), Color32::from_rgb(200, 60, 55)),
+                (Vec2::new(11.0, 4.0), Color32::from_rgb(50, 145, 80)),
+                (Vec2::new(4.0, 11.0), Color32::from_rgb(55, 95, 190)),
+                (Vec2::new(11.0, 11.0), Color32::from_rgb(215, 166, 35)),
+            ] {
+                p.circle_filled(rect.min + offset, 3.0, color);
+            }
+        }
+        1 => {
+            p.circle_stroke(c, 6.0, stroke);
+            line(Vec2::new(13.0, 0.0), Vec2::new(13.0, 6.0));
+            line(Vec2::new(13.0, 6.0), Vec2::new(8.0, 5.0));
+        }
+        2 => {
+            p.rect_stroke(rect.shrink(1.0), 0.0, stroke, egui::StrokeKind::Inside);
+            for y in [4.0, 7.0, 10.0] {
+                line(Vec2::new(4.0, y), Vec2::new(11.0, y));
+            }
+        }
+        3 => {
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    rect.min,
+                    rect.min + Vec2::new(3.0, 13.0),
+                    rect.min + Vec2::new(6.0, 8.0),
+                    rect.min + Vec2::new(12.0, 7.0),
+                ],
+                ink,
+                Stroke::NONE,
+            ));
+        }
+        4 => {
+            for y in [3.0, 7.0, 11.0] {
+                line(Vec2::new(1.0, y), Vec2::new(14.0, y));
+                p.circle_filled(rect.min + Vec2::new(2.0, y), 1.0, ink);
+            }
+        }
+        5 => {
+            p.rect_stroke(
+                egui::Rect::from_min_size(rect.min, Vec2::new(10.0, 11.0)),
+                0.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            p.rect_filled(
+                egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::new(10.0, 11.0)),
+                0.0,
+                ui.visuals().panel_fill,
+            );
+            p.rect_stroke(
+                egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::new(10.0, 11.0)),
+                0.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        6 => {
+            p.rect_filled(rect, 1.0, Color32::from_rgb(55, 95, 160));
+            p.rect_filled(
+                egui::Rect::from_min_size(rect.min + Vec2::new(3.0, 1.0), Vec2::new(8.0, 5.0)),
+                0.0,
+                Color32::from_gray(225),
+            );
+            p.rect_filled(
+                egui::Rect::from_min_size(rect.min + Vec2::new(3.0, 9.0), Vec2::new(8.0, 5.0)),
+                0.0,
+                Color32::from_gray(245),
+            );
+        }
+        7 => {
+            p.circle_stroke(c, 4.0, stroke);
+            for i in 0..8 {
+                let angle = i as f32 * std::f32::consts::FRAC_PI_4;
+                let v = Vec2::angled(angle);
+                p.line_segment([c + v * 4.0, c + v * 7.0], stroke);
+            }
+        }
+        8 => {
+            p.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
+            for y in [4.0, 8.0] {
+                for x in [3.0, 7.0, 11.0] {
+                    p.circle_filled(rect.min + Vec2::new(x, y), 0.8, ink);
+                }
+            }
+            line(Vec2::new(4.0, 12.0), Vec2::new(10.0, 12.0));
+        }
+        9 => {
+            line(Vec2::new(1.0, 10.0), Vec2::new(1.0, 14.0));
+            line(Vec2::new(1.0, 14.0), Vec2::new(14.0, 14.0));
+            line(Vec2::new(14.0, 14.0), Vec2::new(14.0, 10.0));
+            line(Vec2::new(7.0, 1.0), Vec2::new(7.0, 10.0));
+            line(Vec2::new(3.0, 6.0), Vec2::new(7.0, 10.0));
+            line(Vec2::new(11.0, 6.0), Vec2::new(7.0, 10.0));
+        }
+        10 => {
+            p.text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                "?",
+                FontId::proportional(18.0),
+                Color32::from_rgb(45, 95, 170),
+            );
+        }
+        _ => {
+            line(Vec2::new(4.0, 1.0), Vec2::new(11.0, 1.0));
+            line(Vec2::new(4.0, 1.0), Vec2::new(4.0, 8.0));
+            line(Vec2::new(11.0, 1.0), Vec2::new(11.0, 8.0));
+            line(Vec2::new(2.0, 8.0), Vec2::new(13.0, 8.0));
+            line(Vec2::new(7.0, 8.0), Vec2::new(7.0, 15.0));
+        }
+    }
+    response.on_hover_text(tooltip).clicked()
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -1344,14 +2433,22 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     } else {
         egui::Visuals::light()
     };
-    visuals.panel_fill = background(dark);
-    visuals.window_fill = surface(dark);
+    visuals.panel_fill = if dark {
+        Color32::from_rgb(40, 40, 43)
+    } else {
+        Color32::from_rgb(240, 240, 240)
+    };
+    visuals.window_fill = visuals.panel_fill;
     visuals.extreme_bg_color = if dark {
         Color32::from_rgb(13, 19, 28)
     } else {
         Color32::from_rgb(249, 250, 252)
     };
-    visuals.selection.bg_fill = accent_bg(dark);
+    visuals.selection.bg_fill = if dark {
+        Color32::from_rgb(65, 80, 110)
+    } else {
+        Color32::from_rgb(185, 210, 239)
+    };
     visuals.selection.stroke = Stroke::new(
         1.0_f32,
         if dark {
@@ -1370,11 +2467,15 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     } else {
         Color32::from_rgb(214, 219, 226)
     };
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
+    visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::ZERO;
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-        style.spacing.button_padding = Vec2::new(12.0, 8.0);
-        style.spacing.interact_size.y = 30.0;
+        style.spacing.item_spacing = Vec2::new(5.0, 4.0);
+        style.spacing.button_padding = Vec2::new(6.0, 4.0);
+        style.spacing.interact_size.y = 23.0;
         style
             .text_styles
             .insert(egui::TextStyle::Body, FontId::proportional(13.0));
@@ -1391,165 +2492,6 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
             .text_styles
             .insert(egui::TextStyle::Small, FontId::proportional(11.0));
     });
-}
-fn background(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(16, 22, 32)
-    } else {
-        Color32::from_rgb(241, 244, 248)
-    }
-}
-fn surface(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(23, 31, 43)
-    } else {
-        Color32::WHITE
-    }
-}
-fn hover_bg(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(34, 43, 56)
-    } else {
-        Color32::from_rgb(232, 236, 241)
-    }
-}
-fn accent_text(dark: bool) -> Color32 {
-    if dark {
-        ACCENT
-    } else {
-        Color32::from_rgb(145, 57, 32)
-    }
-}
-fn accent_bg(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(63, 43, 40)
-    } else {
-        Color32::from_rgb(255, 227, 217)
-    }
-}
-fn muted(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(163, 176, 194)
-    } else {
-        Color32::from_rgb(82, 96, 116)
-    }
-}
-fn error_color(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(255, 155, 152)
-    } else {
-        Color32::from_rgb(171, 39, 36)
-    }
-}
-fn primary_button(text: &str) -> egui::Button<'_> {
-    egui::Button::new(
-        RichText::new(text)
-            .strong()
-            .color(Color32::from_rgb(40, 24, 23)),
-    )
-    .fill(ACCENT)
-    .min_size(Vec2::new(110.0, 35.0))
-}
-fn nonempty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
-    if value.trim().is_empty() {
-        fallback
-    } else {
-        value
-    }
-}
-fn pill(ui: &mut egui::Ui, text: &str, dark: bool, accent: bool) {
-    egui::Frame::default()
-        .fill(if accent {
-            accent_bg(dark)
-        } else {
-            hover_bg(dark)
-        })
-        .corner_radius(5)
-        .inner_margin(egui::Margin::symmetric(8, 4))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(10.5).color(if accent && dark {
-                ACCENT
-            } else {
-                muted(dark)
-            }));
-        });
-}
-fn section(ui: &mut egui::Ui, title: &str, dark: bool) {
-    ui.add_space(18.0);
-    ui.separator();
-    ui.add_space(10.0);
-    ui.label(RichText::new(title).strong().size(13.0).color(if dark {
-        Color32::from_rgb(213, 222, 234)
-    } else {
-        Color32::from_rgb(46, 61, 81)
-    }));
-    ui.add_space(8.0);
-}
-fn data_row(ui: &mut egui::Ui, key: &str, value: &str, mono: bool, dark: bool) {
-    ui.label(RichText::new(key).size(12.0).color(muted(dark)));
-    let text = if mono {
-        RichText::new(value).monospace().size(12.0)
-    } else {
-        RichText::new(value).size(12.0)
-    };
-    ui.add(egui::Label::new(text).wrap().selectable(true));
-    ui.end_row();
-}
-fn about_card(ui: &mut egui::Ui, title: &str, text: &str, dark: bool) {
-    egui::Frame::default()
-        .fill(surface(dark))
-        .corner_radius(10)
-        .inner_margin(18)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).size(15.0).strong());
-            ui.add_space(7.0);
-            ui.label(RichText::new(text).size(13.0).color(muted(dark)));
-        });
-}
-fn draw_brand(ui: &mut egui::Ui, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    ui.painter().rect_filled(rect, size * 0.23, ACCENT);
-    let ink = Color32::from_rgb(50, 29, 29);
-    let inner = rect.shrink(size * 0.25);
-    let stroke = Stroke::new(size * 0.07, ink);
-    ui.painter()
-        .line_segment([inner.left_top(), inner.right_top()], stroke);
-    ui.painter()
-        .line_segment([inner.left_top(), inner.left_bottom()], stroke);
-    ui.painter()
-        .line_segment([inner.left_bottom(), inner.right_bottom()], stroke);
-    ui.painter()
-        .circle_filled(inner.right_center(), size * 0.07, ink);
-}
-fn draw_empty_window(ui: &mut egui::Ui, dark: bool) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(92.0, 68.0), Sense::hover());
-    ui.painter().rect_filled(rect, 10.0, hover_bg(dark));
-    ui.painter().line_segment(
-        [
-            rect.min + Vec2::new(0.0, 20.0),
-            rect.min + Vec2::new(92.0, 20.0),
-        ],
-        Stroke::new(1.0_f32, muted(dark).gamma_multiply(0.4)),
-    );
-    for x in [12.0, 22.0, 32.0] {
-        ui.painter()
-            .circle_filled(rect.min + Vec2::new(x, 10.0), 2.0, ACCENT);
-    }
-    ui.painter().line_segment(
-        [
-            rect.min + Vec2::new(18.0, 38.0),
-            rect.min + Vec2::new(72.0, 38.0),
-        ],
-        Stroke::new(3.0_f32, muted(dark).gamma_multiply(0.4)),
-    );
-    ui.painter().line_segment(
-        [
-            rect.min + Vec2::new(18.0, 49.0),
-            rect.min + Vec2::new(55.0, 49.0),
-        ],
-        Stroke::new(3.0_f32, muted(dark).gamma_multiply(0.25)),
-    );
 }
 fn style_names(style: u32, ex_style: u32) -> String {
     let mut names = Vec::new();
@@ -1620,5 +2562,12 @@ pub fn app_icon() -> egui::IconData {
         rgba,
         width: size as u32,
         height: size as u32,
+    }
+}
+fn key_name(key: u32) -> String {
+    match key {
+        0x30..=0x39 | 0x41..=0x5a => char::from_u32(key).unwrap_or('?').to_string(),
+        0x70..=0x87 => format!("F{}", key - 0x6f),
+        _ => format!("0x{key:02X}"),
     }
 }

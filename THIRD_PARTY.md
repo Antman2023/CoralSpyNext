@@ -4,7 +4,7 @@ CoralSpyNext 为重新实现的 Rust 项目，功能方向参考 Coral Studio �
 
 直接使用的开源依赖：
 - eframe / egui 0.31.1：MIT OR Apache-2.0，https://github.com/emilk/egui
-- windows-sys 0.59.0：MIT OR Apache-2.0，https://github.com/microsoft/windows-rs
+- windows 0.58.0 / windows-sys 0.59.0：MIT OR Apache-2.0，https://github.com/microsoft/windows-rs
 - serde / serde_json：MIT OR Apache-2.0，https://github.com/serde-rs
 - embed-resource：MIT，https://github.com/nabijaczleweli/rust-embed-resource
 

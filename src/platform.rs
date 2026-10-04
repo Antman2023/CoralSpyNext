@@ -561,6 +561,34 @@ impl Drop for SaveDialogGuard {
 /// Called only after the user's Export action. Cancellation writes nothing.
 /// The native dialog confirms overwriting; the selected file is UTF-8.
 pub fn save_text_dialog(text: &str, json: bool) -> Result<Option<String>, String> {
+    save_text_as(text, if json { "json" } else { "txt" })
+}
+
+/// Explicit export formats, with native cancellation and overwrite confirmation.
+pub fn save_text_as(text: &str, format: &str) -> Result<Option<String>, String> {
+    let (name, filter_text, extension_text) = match format {
+        "json" => (
+            "CoralSpyNext-window.json",
+            "JSON 文件 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0\0",
+            "json\0",
+        ),
+        "html" | "htm" => (
+            "CoralSpyNext-page.html",
+            "网页文件 (*.html)\0*.html;*.htm\0所有文件 (*.*)\0*.*\0\0",
+            "html\0",
+        ),
+        "rtf" => (
+            "CoralSpyNext-text.rtf",
+            "RTF 文件 (*.rtf)\0*.rtf\0所有文件 (*.*)\0*.*\0\0",
+            "rtf\0",
+        ),
+        "txt" => (
+            "CoralSpyNext-window.txt",
+            "文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0\0",
+            "txt\0",
+        ),
+        _ => return Err("不支持的导出格式 / Unsupported export format".into()),
+    };
     if SAVE_DIALOG_OPEN
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -569,26 +597,11 @@ pub fn save_text_dialog(text: &str, json: bool) -> Result<Option<String>, String
     }
     let _guard = SaveDialogGuard;
     let mut file = vec![0u16; 32_768];
-    let name = if json {
-        "CoralSpyNext-window.json"
-    } else {
-        "CoralSpyNext-window.txt"
-    };
     for (out, unit) in file.iter_mut().zip(name.encode_utf16()) {
         *out = unit;
     }
-    let filter: Vec<u16> = if json {
-        "JSON 文件 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0\0"
-            .encode_utf16()
-            .collect()
-    } else {
-        "文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0\0"
-            .encode_utf16()
-            .collect()
-    };
-    let extension: Vec<u16> = if json { "json\0" } else { "txt\0" }
-        .encode_utf16()
-        .collect();
+    let filter: Vec<u16> = filter_text.encode_utf16().collect();
+    let extension: Vec<u16> = extension_text.encode_utf16().collect();
     let title: Vec<u16> = "导出 CoralSpyNext 检查结果\0".encode_utf16().collect();
     let foreground = unsafe { GetForegroundWindow() };
     let mut owner_pid = 0;
@@ -633,7 +646,24 @@ pub fn save_text_dialog(text: &str, json: bool) -> Result<Option<String>, String
     // Preserve even non-Unicode Windows paths for I/O; lossy conversion is
     // used only in the success message, not for choosing the output file.
     let path = PathBuf::from(OsString::from_wide(&file[..length]));
-    std::fs::write(&path, text.as_bytes()).map_err(|error| format!("无法保存文件：{error}"))?;
+    let html = matches!(format, "html" | "htm");
+    let exported = if html {
+        // BOM takes precedence over legacy GBK/GB2312 meta declarations.
+        format!(
+            "\u{feff}<!-- saved from url=(0014)about:internet -->\n{}",
+            text.trim_start_matches('\u{feff}')
+        )
+    } else {
+        text.to_owned()
+    };
+    std::fs::write(&path, exported.as_bytes()).map_err(|error| format!("无法保存文件：{error}"))?;
+    if html {
+        // Best effort Internet-zone ADS; the HTML Mark-of-the-Web above remains
+        // on file systems without alternate data streams. Do not execute HTML.
+        let mut zone = path.as_os_str().to_owned();
+        zone.push(":Zone.Identifier");
+        let _ = std::fs::write(PathBuf::from(zone), b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 

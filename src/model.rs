@@ -80,3 +80,52 @@ pub fn matches_filter(node: &WindowNode, query: &str) -> bool {
 pub fn window_text(info: &WindowInfo) -> String {
     format!("CoralSpyNext — 窗口检查结果\nHWND: {}\n父句柄: {}\n标题: {}\n类型: {}\n进程: {}\nPID: {} / TID: {}\n位置: ({}, {})\n大小: {} × {} px\nDPI: {}\n可见: {} / 启用: {}\nStyle: 0x{:08X}\nExStyle: 0x{:08X}\n文本状态: {}\n", hwnd_text(info.hwnd), hwnd_text(info.parent), info.title, info.class_name, info.process_name, info.pid, info.tid, info.rect.left, info.rect.top, info.rect.width(), info.rect.height(), info.dpi, info.visible, info.enabled, info.style, info.ex_style, info.text_status)
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ContentNode {
+    pub depth: usize,
+    pub name: String,
+    pub role: String,
+    pub value: String,
+    pub automation_id: String,
+    pub class_name: String,
+    pub is_password: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ContentSnapshot {
+    pub hwnd: u64,
+    pub source: String,
+    pub nodes: Vec<ContentNode>,
+    pub text: String,
+    pub warnings: Vec<String>,
+    pub truncated: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MenuEntry {
+    pub depth: usize,
+    pub label: String,
+    pub id: u32,
+    pub enabled: bool,
+    pub checked: bool,
+    pub separator: bool,
+    pub submenu: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MenuSnapshot {
+    pub hwnd: u64,
+    pub entries: Vec<MenuEntry>,
+    pub warnings: Vec<String>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IconImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub kind: String,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IconSnapshot {
+    pub hwnd: u64,
+    pub icons: Vec<IconImage>,
+    pub warnings: Vec<String>,
+}
