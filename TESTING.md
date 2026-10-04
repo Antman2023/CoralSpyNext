@@ -12,7 +12,11 @@
 
 Windows GNU x64 类型检查、严格 Clippy、release 链接与 PE/DLL 检查在开发机交叉执行。以发布包 `BUILD-INFO.json` 的对应提交和执行结果为准。
 
-## Windows fixture（编译过，不代表执行过）
+## Windows runner 验证记录
+
+[2026-10-04 / run 37189047036](https://github.com/Antman2023/CoralSpyNext/actions/runs/37189047036) 在 Windows Server 2022 执行了全部7个主程序测试可执行文件和目标限定Hook fixture：6个Rust测试程序通过，UIA程序的过期句柄和密码保护用例通过，但内容读取用例失败。x64、x86各19项Hook用例通过，桌面全局用例未运行。这是修复过程中的历史诊断记录，该次工作流整体失败，不能作为已发布或全部通过的依据；版本的最终结果以其对应Actions运行和附件报告为准。
+
+## Windows fixture（以对应运行报告为准）
 
 源码包含真实自有 Win32 控件测试，分别覆盖：
 - 创建/销毁窗口、元数据、隐私标题与过期句柄

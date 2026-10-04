@@ -34,7 +34,10 @@ use windows::{
 };
 use windows_sys::Win32::{
     System::Threading::CREATE_NO_WINDOW,
-    UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId, IsWindow},
+    UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindowThreadProcessId, IsWindow, STATE_SYSTEM_PROTECTED,
+        STATE_SYSTEM_VALID,
+    },
 };
 
 pub const MAX_DEPTH: usize = 32;
@@ -270,6 +273,7 @@ impl Drop for ComApartment {
 // Traversal and bounded text helpers follow below.
 
 struct Walk {
+    automation: IUIAutomation,
     snapshot: ContentSnapshot,
     started: Instant,
     remaining: usize,
@@ -351,7 +355,7 @@ impl Walk {
         // Phase one reads no Name, Value, Text or legacy content anywhere. A
         // container's TextPattern may aggregate descendants, so every descendant
         // must be classified before any of that container's content is requested.
-        let password = password_status(element);
+        let password = password_status(element, &self.automation);
         let protected = password != Some(false);
         if !self.time_left() {
             return false;
@@ -440,7 +444,7 @@ impl Walk {
                 break;
             }
             let element = self.elements[index].clone();
-            if password_status(&element) != Some(false) {
+            if password_status(&element, &self.automation) != Some(false) {
                 invalidate_ancestors(&mut self.safe_subtree, &self.parents, index);
                 self.snapshot.nodes[index].is_password = true;
                 self.snapshot.nodes[index].value = label(
@@ -572,6 +576,7 @@ pub fn inspect_in_process(hwnd: u64) -> Result<ContentSnapshot, String> {
                 )
             })?;
     let mut state = Walk {
+        automation: automation.clone(),
         snapshot: ContentSnapshot {
             hwnd,
             source: label(
@@ -655,18 +660,74 @@ pub fn inspect_in_process(hwnd: u64) -> Result<ContentSnapshot, String> {
     Ok(state.snapshot)
 }
 
-fn password_status(element: &IUIAutomationElement) -> Option<bool> {
-    unsafe { element.GetCurrentPropertyValueEx(UIA_IsPasswordPropertyId, true) }
-        .ok()
-        .and_then(|value| {
-            // A missing/unsupported/default property cannot authorize reading.
-            // Accept exactly VT_BOOL, without VARIANT type coercion.
-            if unsafe { value.as_raw().Anonymous.Anonymous.vt } == 11 {
-                bool::try_from(&value).ok()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UiaPasswordStatus {
+    Known(bool),
+    Unsupported,
+    Unverified,
+}
+
+fn password_status(element: &IUIAutomationElement, automation: &IUIAutomation) -> Option<bool> {
+    let uia = match unsafe { element.GetCurrentPropertyValueEx(UIA_IsPasswordPropertyId, true) } {
+        Ok(value) if unsafe { value.as_raw().Anonymous.Anonymous.vt } == 11 => {
+            // Accept exactly VT_BOOL, without VARIANT type coercion or defaults.
+            bool::try_from(&value)
+                .map(UiaPasswordStatus::Known)
+                .unwrap_or(UiaPasswordStatus::Unverified)
+        }
+        Ok(value) => {
+            // Only the documented NotSupported sentinel permits a fallback.
+            // Malformed variants, access failures and expired elements do not.
+            if matches!(unsafe { automation.CheckNotSupported(&value) }, Ok(result) if result.as_bool())
+            {
+                UiaPasswordStatus::Unsupported
             } else {
-                None
+                UiaPasswordStatus::Unverified
             }
-        })
+        }
+        Err(_) => UiaPasswordStatus::Unverified,
+    };
+    classify_password_evidence(uia, || {
+        // Standard MSAA-backed TreeView/ListView items can omit IsPassword.
+        // The UIA bridge exposes their real numeric role/state through this
+        // supported pattern, including STATE_SYSTEM_PROTECTED. Query no Name,
+        // Value, Description, Text or other content to make this decision.
+        // https://learn.microsoft.com/windows/win32/winauto/uiauto-implementinglegacyiaccessible
+        // https://learn.microsoft.com/windows/win32/winauto/object-state-constants
+        let legacy = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                UIA_LegacyIAccessiblePatternId,
+            )
+        }
+        .ok()?;
+        let state = unsafe { legacy.CurrentState() }.ok()?;
+        let role = unsafe { legacy.CurrentRole() }.ok()?;
+        Some((role, state))
+    })
+}
+
+fn classify_password_evidence(
+    uia: UiaPasswordStatus,
+    legacy: impl FnOnce() -> Option<(u32, u32)>,
+) -> Option<bool> {
+    match uia {
+        UiaPasswordStatus::Known(password) => Some(password),
+        UiaPasswordStatus::Unverified => None,
+        UiaPasswordStatus::Unsupported => {
+            // Both fields must have been read successfully from a supported
+            // pattern. Never equate an absent/error property with state zero.
+            let (role, state) = legacy()?;
+            if state & STATE_SYSTEM_PROTECTED != 0 {
+                return Some(true);
+            }
+            if !(ROLE_SYSTEM_TITLEBAR..=ROLE_SYSTEM_OUTLINEBUTTON).contains(&role)
+                || state & !(STATE_SYSTEM_VALID | STATE_SYSTEM_HASPOPUP) != 0
+            {
+                return None;
+            }
+            Some(false)
+        }
+    }
 }
 
 fn invalidate_ancestors(safe: &mut [bool], parents: &[Option<usize>], mut index: usize) {
@@ -794,6 +855,86 @@ fn role_name(kind: Option<UIA_CONTROLTYPE_ID>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_uia_protection_is_authoritative_without_legacy_queries() {
+        for password in [false, true] {
+            assert_eq!(
+                classify_password_evidence(UiaPasswordStatus::Known(password), || {
+                    panic!("explicit UIA protection must not query legacy fallback")
+                }),
+                Some(password)
+            );
+        }
+    }
+
+    #[test]
+    fn failed_or_malformed_uia_protection_never_uses_a_legacy_fallback() {
+        assert_eq!(
+            classify_password_evidence(UiaPasswordStatus::Unverified, || {
+                panic!("failed UIA evidence must remain fail-closed")
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn unsupported_uia_needs_successful_legacy_role_and_state() {
+        assert_eq!(
+            classify_password_evidence(UiaPasswordStatus::Unsupported, || None),
+            None
+        );
+        for role in [
+            ROLE_SYSTEM_OUTLINEITEM,
+            ROLE_SYSTEM_LISTITEM,
+            ROLE_SYSTEM_TEXT,
+            ROLE_SYSTEM_CELL,
+        ] {
+            assert_eq!(
+                classify_password_evidence(UiaPasswordStatus::Unsupported, || Some((role, 0))),
+                Some(false),
+            );
+        }
+    }
+
+    #[test]
+    fn documented_legacy_popup_state_does_not_imply_protection() {
+        assert_eq!(
+            classify_password_evidence(UiaPasswordStatus::Unsupported, || {
+                Some((ROLE_SYSTEM_LISTITEM, STATE_SYSTEM_HASPOPUP))
+            }),
+            Some(false),
+        );
+    }
+
+    #[test]
+    fn legacy_protected_flag_always_redacts_even_with_other_state_bits() {
+        for role in [0, ROLE_SYSTEM_TEXT, ROLE_SYSTEM_LISTITEM, u32::MAX] {
+            for state in [STATE_SYSTEM_PROTECTED, STATE_SYSTEM_PROTECTED | 0x0010_0004] {
+                assert_eq!(
+                    classify_password_evidence(UiaPasswordStatus::Unsupported, || Some((
+                        role, state
+                    ))),
+                    Some(true),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_legacy_role_or_state_cannot_authorize_content() {
+        for (role, state) in [
+            (0, 0),
+            (ROLE_SYSTEM_OUTLINEBUTTON + 1, 0),
+            (u32::MAX, 0),
+            (ROLE_SYSTEM_LISTITEM, 0x8000_0000),
+        ] {
+            assert_eq!(
+                classify_password_evidence(UiaPasswordStatus::Unsupported, || Some((role, state))),
+                None,
+            );
+        }
+    }
+
     #[test]
     fn changing_password_invalidates_every_aggregate_ancestor_only() {
         let mut safe = vec![true; 5];

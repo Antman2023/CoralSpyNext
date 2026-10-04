@@ -4,8 +4,8 @@
 
 - The standalone fixture cross-compiles successfully as **x86** and **x64** with MinGW `-Wall -Wextra -Werror`.
 - The shell build script passes `bash -n`.
-- **Native Windows integration tests have not been run in this Linux workspace.** No original application, uploaded executable, other user application, or Windows fixture executable was run here. Cross-compilation is not evidence of hook, UI, timeout, or cleanup behavior on Windows.
-- PowerShell is not installed in this workspace; its harness has not yet been executed or parsed by PowerShell. Its expected cases are executable acceptance criteria, not recorded passes.
+- **Native targeted tests ran on Windows Server 2022 in [Actions run 37189047036](https://github.com/Antman2023/CoralSpyNext/actions/runs/37189047036): 19 passes for x64 and 19 for x86.** Desktop-wide cases were skipped. The full workflow still failed a separate root UIA test; this is not a complete release pass. No original application or user application was executed.
+- PowerShell is not installed in the Linux authoring workspace. The checked-in harness was parsed and executed by PowerShell 7 on the Windows runner. Interactive Windows 11 visual acceptance remains separate.
 
 ## Files
 
@@ -82,7 +82,7 @@ The harness waits for manifest state rather than relying on a guessed startup sl
 
 ## Acceptance coverage
 
-All cases below are currently **unrun on Windows**:
+Targeted cases below passed in the linked Windows runner run. Case 14 (desktop-wide capture) remains **unrun**, and is never implicitly enabled by release CI:
 
 1. Raw RTF result kind, prefix, retained formatting, byte-for-byte equality with the fixture's own `SF_RTF` output, and explicit `complete` state.
 2. All three exact ListView header records, including Unicode, an empty label and a literal tab; all nine cells, including accented, Greek, Japanese and supplementary-plane Unicode.
